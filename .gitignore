@@ -1,0 +1,23 @@
+# Emacs backups and auto-save files
+*~
+\#*\#
+.\#*
+
+# Downloaded packages and generated native code
+/elpa/
+/eln-cache/
+/tree-sitter/
+
+# Runtime state
+/auto-save-list/
+/bookmarks
+/dape-breakpoints
+/eshell/history
+/history
+/places
+/projectile-bookmarks.eld
+/projectile-frecency.eld
+/projects
+/recentf
+/tramp
+/transient/
