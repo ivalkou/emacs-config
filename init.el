@@ -290,6 +290,9 @@
   (diff-hl-margin-mode 1)
   ;; Обновлять полосы во время редактирования, без сохранения файла.
   (require 'diff-hl-flydiff)
+  ;; После операций Magit обновлять отметки во всех буферах репозитория.
+  (with-eval-after-load 'magit-mode
+    (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
   (add-hook 'diff-hl-mode-hook #'diff-hl-flydiff-mode))
 
 ;; Глобальные горячие клавиши.
