@@ -51,6 +51,13 @@
   :ensure t
   :config
   (load-theme 'catppuccin t)
+  ;; Разделители окон того же цвета, что и затемнённый текст.
+  (let ((text-color (face-foreground 'shadow nil t)))
+    (dolist (face '(window-divider
+                    window-divider-first-pixel
+                    window-divider-last-pixel
+                    vertical-border))
+      (set-face-attribute face nil :foreground text-color)))
   ;; Подсветка парных скобок цветом и фоном.
   ;; Настройка после загрузки темы, чтобы тема не перебила её.
   (set-face-attribute 'show-paren-match nil
@@ -90,10 +97,17 @@
 
 ;; См. ~/.config/emacs/early-init.el для отключения декораций окна.
 
+(defun my-tab-bar-tab-name ()
+  "Показывать имя текущего проекта или имя буфера вне проекта."
+  (if-let ((project (project-current nil)))
+      (project-name project)
+    (buffer-name)))
+
 ;; Tab Bar: встроенные рабочие пространства с независимым расположением окон.
 (use-package tab-bar
   :ensure nil
   :custom
+  (tab-bar-tab-name-function #'my-tab-bar-tab-name)
   ;; Не занимать место, пока открыт только один таб.
   (tab-bar-show 1)
   ;; Убрать кнопки создания и закрытия: команды доступны через C-x t.
@@ -250,10 +264,12 @@
   :config
   (setq vterm-shell (or (getenv "SHELL") "/bin/zsh"))
   (setq vterm-max-scrollback 10000)
+  (setq vterm-min-window-width 30)
   ;; Даже без запущенной команды vterm держит shell-процесс.
   ;; Завершать его вместе с буфером или Emacs без подтверждения.
   (add-hook 'vterm-mode-hook
             (lambda ()
+              (display-line-numbers-mode -1)
               (setq-local kill-buffer-query-functions
                           (delq 'process-kill-buffer-query-function
                                 kill-buffer-query-functions))
@@ -396,6 +412,12 @@
 (use-package visible-mark
   :ensure t
   :config
+  (set-face-attribute 'visible-mark-face1 nil
+                      :background (catppuccin-color 'surface1)
+                      :foreground (catppuccin-color 'text))
+  (set-face-attribute 'visible-mark-face2 nil
+                      :background (catppuccin-color 'surface2)
+                      :foreground (catppuccin-color 'text))
   (global-visible-mark-mode 2)
   (setq visible-mark-max 1)
   (setq visible-mark-faces `(visible-mark-face1 visible-mark-face2)))
@@ -418,3 +440,6 @@
   :config
   ;; Использовать Unicode-глифы; текущий Nerd Font их поддерживает.
   (setq vundo-glyph-alist vundo-unicode-symbols))
+
+;; Автозакрытие скобок
+(electric-pair-mode 1)
