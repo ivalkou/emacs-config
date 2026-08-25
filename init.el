@@ -133,15 +133,13 @@
   :config
   (vertico-mode 1))
 
-;; Orderless: нечёткий поиск по частям слов при дополнении.
+;; Orderless: поиск по частям слов при дополнении.
 ;; Позволяет искать "fi em" и находить "find-file-emacs".
 (use-package orderless
   :ensure t
   :config
   (setq completion-styles '(orderless basic))
-  (setq completion-category-overrides '((file (styles basic partial-completion))))
-  ;; Включаем flex/fuzzy-совпадение: "iele" найдёт "init.el"
-  (setq orderless-matching-styles '(orderless-literal orderless-regexp orderless-flex)))
+  (setq completion-category-overrides '((file (styles basic partial-completion)))))
 
 ;; Marginalia: показывает полезные подсказки рядом с вариантами дополнения.
 ;; Например, описание функций, размер файлов, статус буферов.
