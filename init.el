@@ -49,6 +49,7 @@
 ;; Тема Catppuccin (вариант mocha используется по умолчанию).
 (use-package catppuccin-theme
   :ensure t
+  :functions (catppuccin-color)
   :config
   (load-theme 'catppuccin t)
   ;; Разделители окон того же цвета, что и затемнённый текст.
@@ -97,9 +98,11 @@
 
 ;; См. ~/.config/emacs/early-init.el для отключения декораций окна.
 
+(require 'project)
+
 (defun my-tab-bar-tab-name ()
   "Показывать имя текущего проекта или имя буфера вне проекта."
-  (if-let ((project (project-current nil)))
+  (if-let* ((project (project-current nil)))
       (project-name project)
     (buffer-name)))
 
@@ -164,6 +167,8 @@
 (recentf-mode 1)
 (save-place-mode 1)
 
+(require 'xref)
+
 ;; Consult: улучшенные команды поиска и навигации.
 (use-package consult
   :ensure t
@@ -183,7 +188,10 @@
   :ensure t
   :defer t
   :init
-  (setq prefix-help-command #'embark-prefix-help-command))
+  (setq prefix-help-command #'embark-prefix-help-command)
+  :config
+  (keymap-set embark-identifier-map "c" #'eglot-code-actions)
+  (keymap-set embark-flymake-map "c" #'eglot-code-actions))
 
 ;; Интеграция Embark с Consult.
 (use-package embark-consult
@@ -194,13 +202,15 @@
 ;; Например, при русской раскладке C-s остаётся C-s, а не C-ы.
 (use-package reverse-im
   :ensure t
+  :demand t
+  :custom
+  (reverse-im-input-methods '("russian-computer"))
   :config
-  (setq reverse-im-input-methods '("russian-computer"))
   (reverse-im-mode 1))
 
 ;; Which-key: показывает подсказки по доступным клавишам.
 (use-package which-key
-  :ensure t
+  :ensure nil
   :config
   (which-key-mode 1))
 
@@ -216,13 +226,11 @@
       '((rust "https://github.com/tree-sitter/tree-sitter-rust")
         (toml "https://github.com/tree-sitter-grammars/tree-sitter-toml")))
 
+;; Использовать tree-sitter режимы для Rust и TOML.
+(setopt treesit-enabled-modes '(rust-ts-mode toml-ts-mode))
+
 ;; Максимальный уровень подсветки tree-sitter.
 (setq treesit-font-lock-level 4)
-
-;; Привязать расширения файлов к tree-sitter режимам.
-(add-to-list 'auto-mode-alist '("\\.rs\\'" . rust-ts-mode))
-(add-to-list 'auto-mode-alist '("\\.toml\\'" . toml-ts-mode))
-
 
 ;; Увеличенный блок чтения ускоряет обмен крупными ответами с rust-analyzer.
 ;; Цена — до 4 МиБ памяти на одну операцию чтения процесса.
@@ -240,23 +248,10 @@
         eglot-extend-to-xref t)
   :config
   ;; Автоматически выключать сервер при закрытии последнего управляемого буфера.
-  (setq eglot-autoshutdown t)
-  ;; Сервер для Rust.
-  (add-to-list 'eglot-server-programs
-               '(rust-ts-mode "rust-analyzer")))
+  (setq eglot-autoshutdown t))
 
 ;; Vterm: быстрый терминал внутри Emacs на основе libvterm.
 ;; Требует cmake и libtool. На macOS: brew install cmake libtool.
-(defun my-project-vterm ()
-  "Открыть отдельный vterm в корне текущего проекта."
-  (interactive)
-  (let* ((project (project-current t))
-         (default-directory (project-root project)))
-    (vterm
-     (format "*vterm*<%s>"
-             (file-name-nondirectory
-              (directory-file-name default-directory))))))
-
 (use-package vterm
   :ensure t
   :config
@@ -271,16 +266,16 @@
               (setq-local kill-buffer-query-functions
                           (delq 'process-kill-buffer-query-function
                                 kill-buffer-query-functions))
-              (when-let ((process (get-buffer-process (current-buffer))))
+              (when-let* ((process (get-buffer-process (current-buffer))))
                 (set-process-query-on-exit-flag process nil))))
   :bind
   (("C-c t" . vterm)
-   ("C-c T" . vterm-other-window)
-   ("C-x p s" . my-project-vterm)))
+   ("C-c T" . vterm-other-window)))
 
 ;; Diff-hl: цветовые полосы слева для изменений в git.
 (use-package diff-hl
   :ensure t
+  :functions (diff-hl-magit-post-refresh)
   :config
   (global-diff-hl-mode 1)
   ;; Показывать полосы в отступе слева (margin), а не во фринже.
