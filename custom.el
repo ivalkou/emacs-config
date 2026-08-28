@@ -7,8 +7,8 @@
  '(package-selected-packages
    '(avy cape catppuccin-theme consult corfu dape denote diff-hl embark
 	 embark-consult exec-path-from-shell expreg magit marginalia
-	 move-text orderless rainbow-delimiters
-	 reverse-im swift-mode telephone-line vertico visible-mark vterm vundo)))
+	 move-text nerd-icons orderless rainbow-delimiters reverse-im swift-mode
+	 telephone-line treemacs treemacs-nerd-icons vertico visible-mark vterm vundo)))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.

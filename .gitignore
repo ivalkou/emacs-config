@@ -10,6 +10,7 @@
 
 # Runtime state
 /auto-save-list/
+/.cache/
 /bookmarks
 /dape-breakpoints
 /eshell/history

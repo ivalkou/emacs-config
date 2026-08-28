@@ -88,9 +88,12 @@
    ("README\\.md\\'" . markdown-ts-mode-maybe))
   :hook (markdown-ts-mode . visual-line-mode))
 
-;; Nerd-icons пока не используется, но может понадобиться другим UI-пакетам.
-;; (use-package nerd-icons
-;;   :ensure t)
+;; Nerd Icons: пиктограммы из уже используемого Nerd Font.
+(use-package nerd-icons
+  :ensure t
+  :defer t
+  :custom
+  (nerd-icons-font-family "Hack Nerd Font Mono"))
 
 ;; Отключить стартовое приветственное окно Emacs.
 (setq inhibit-startup-message t)
@@ -214,6 +217,23 @@
 (use-package magit
   :ensure t
   :commands magit-status)
+
+;; Treemacs: дерево текущего проекта со слежением за активным буфером.
+(use-package treemacs
+  :ensure t
+  :defer t
+  :bind (("C-c e" . treemacs))
+  :custom
+  (treemacs-follow-after-init t)
+  :config
+  (treemacs-follow-mode 1))
+
+;; Тема Treemacs использует glyphs из Nerd Fonts вместо SVG-иконок.
+(use-package treemacs-nerd-icons
+  :ensure t
+  :after treemacs
+  :config
+  (treemacs-nerd-icons-config))
 
 ;; Tree-sitter в Emacs 31 автоматически устанавливает grammars, которые
 ;; регистрируют встроенные ts-modes, и включает их вместо обычных modes.
