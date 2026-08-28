@@ -188,10 +188,7 @@
   :ensure t
   :defer t
   :init
-  (setq prefix-help-command #'embark-prefix-help-command)
-  :config
-  (keymap-set embark-identifier-map "c" #'eglot-code-actions)
-  (keymap-set embark-flymake-map "c" #'eglot-code-actions))
+  (setq prefix-help-command #'embark-prefix-help-command))
 
 ;; Интеграция Embark с Consult.
 (use-package embark-consult
@@ -304,7 +301,8 @@
    ("C-x g" . magit-status)
    ;; Быстрый literal search с C-s/C-r внутри поиска.
    ("C-c i" . isearch-forward)
-   ("C-c I" . isearch-backward)))
+   ("C-c I" . isearch-backward)
+   ("C-c c" . eglot-code-actions)))
 
 ;; Удалять выделенный текст при редактировании.
 (use-package delsel
