@@ -278,6 +278,17 @@
   (setq eglot-sync-connect 0
         eglot-extend-to-xref t)
   :config
+  ;; Eglot implements recursive watches as one kqueue descriptor per directory.
+  ;; This repository exceeds the macOS GUI process descriptor limit, while
+  ;; SourceKit-LSP still receives open-buffer changes through standard LSP sync.
+  (cl-defmethod eglot-client-capabilities :around ((server eglot-lsp-server))
+    (let ((capabilities (cl-call-next-method)))
+      (when (assq 'swift-mode (eglot--languages server))
+        (plist-put (plist-get capabilities :workspace)
+                   :didChangeWatchedFiles
+                   '(:dynamicRegistration :json-false
+                     :relativePatternSupport t)))
+      capabilities))
   ;; xcrun выбирает SourceKit-LSP из активного Xcode/DEVELOPER_DIR.
   (add-to-list 'eglot-server-programs
                '((swift-mode :language-id "swift")
@@ -377,16 +388,21 @@
     (setenv "PATH"
             (concat llvm-bin path-separator path))))
 
+;; Xcode build, run and debug commands for Swift projects.
+(require 'my-xcode (expand-file-name "my-xcode.el" user-emacs-directory))
 ;; Debug Adapter Protocol — отладка через lldb-dap.
 (use-package dape
   :ensure t
+  :custom
+  (dape-request-timeout 60)
   :functions
   (dape-breakpoint-load
    dape-breakpoint-save
-   dape-mouse-breakpoint-toggle)
+   dape-mouse-breakpoint-toggle
+   dape-quit
+   dape-restart)
   :config
-  ;; Параметры сборки и запуска задаются через `dape-command'
-  ;; в .dir-locals.el или персональном .dir-locals-2.el проекта.
+  ;; Xcode commands assemble `dape-command' from discovered project state.
 
   ;; Сохранять breakpoints между перезапусками Emacs.
   (add-hook 'kill-emacs-hook #'dape-breakpoint-save)
