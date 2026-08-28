@@ -79,15 +79,14 @@
   (set-face-attribute 'org-level-1 nil :height 1.5)
   (set-face-attribute 'org-level-2 nil :height 1.2))
 
-;; Markdown: редактирование .md-файлов и README с подсветкой разметки.
-(use-package markdown-mode
-  :ensure t
+;; Встроенный в Emacs 31 tree-sitter режим Markdown. При первом открытии
+;; сам регистрирует и устанавливает grammars markdown и markdown-inline.
+(use-package markdown-ts-mode
+  :ensure nil
   :mode
-  (("\\.md\\'" . markdown-mode)
-   ("README\\.md\\'" . gfm-mode))
-  :hook (markdown-mode . visual-line-mode)
-  :custom
-  (markdown-command "pandoc"))
+  (("\\.md\\'" . markdown-ts-mode-maybe)
+   ("README\\.md\\'" . markdown-ts-mode-maybe))
+  :hook (markdown-ts-mode . visual-line-mode))
 
 ;; Nerd-icons пока не используется, но может понадобиться другим UI-пакетам.
 ;; (use-package nerd-icons
@@ -216,34 +215,53 @@
   :ensure t
   :commands magit-status)
 
-;; Tree-sitter (treesit): встроен в Emacs, начиная с версии 29.
-;; Грамматики для Rust и TOML устанавливаются через
-;; M-x treesit-install-language-grammar.
-(setq treesit-language-source-alist
-      '((rust "https://github.com/tree-sitter/tree-sitter-rust")
-        (toml "https://github.com/tree-sitter-grammars/tree-sitter-toml")))
+;; Tree-sitter в Emacs 31 автоматически устанавливает grammars, которые
+;; регистрируют встроенные ts-modes, и включает их вместо обычных modes.
+(require 'treesit)
+(setopt treesit-auto-install-grammar 'always
+        treesit-enabled-modes t
+        treesit-font-lock-level 4)
 
-;; Использовать tree-sitter режимы для Rust и TOML.
-(setopt treesit-enabled-modes '(rust-ts-mode toml-ts-mode))
+;; swift-mode 10 пока не регистрирует grammar сам, поэтому для Swift остаётся
+;; единственный внешний recipe.
+(add-to-list 'treesit-language-source-alist
+             '(swift "https://github.com/alex-pinkus/tree-sitter-swift"
+                     :revision "0.7.3-with-generated-files"
+                     :copy-queries t))
 
-;; Максимальный уровень подсветки tree-sitter.
-(setq treesit-font-lock-level 4)
+(defun my-swift-treesit-setup ()
+  "Установить и подключить Swift tree-sitter parser к текущему буферу."
+  (when (treesit-ensure-installed 'swift)
+    (treesit-parser-create 'swift)))
+
+;; swift-mode отвечает за редактирование и подсветку, а подключённый parser
+;; даёт структурное дерево для treesit-команд и расширений.
+(use-package swift-mode
+  :ensure t
+  :mode "\\.swift\\'"
+  :hook (swift-mode . my-swift-treesit-setup))
 
 ;; Увеличенный блок чтения ускоряет обмен крупными ответами с rust-analyzer.
 ;; Цена — до 4 МиБ памяти на одну операцию чтения процесса.
 (setq read-process-output-max (* 4 1024 1024))
 
 ;; Eglot: встроенный LSP-клиент (с Emacs 29).
-;; Автоматически подключается к rust-analyzer в Rust-буферах.
+;; Автоматически подключает rust-analyzer и SourceKit-LSP.
 (use-package eglot
   :ensure nil
-  :hook (rust-ts-mode . eglot-ensure)
+  :hook
+  ((rust-ts-mode . eglot-ensure)
+   (swift-mode . eglot-ensure))
   :init
   ;; Подключать LSP асинхронно, не блокируя интерфейс до трёх секунд.
   ;; Разрешить Xref продолжать навигацию во внешних файлах проекта.
   (setq eglot-sync-connect 0
         eglot-extend-to-xref t)
   :config
+  ;; xcrun выбирает SourceKit-LSP из активного Xcode/DEVELOPER_DIR.
+  (add-to-list 'eglot-server-programs
+               '((swift-mode :language-id "swift")
+                 . ("xcrun" "sourcekit-lsp")))
   ;; Автоматически выключать сервер при закрытии последнего управляемого буфера.
   (setq eglot-autoshutdown t))
 
@@ -345,9 +363,11 @@
   :functions
   (dape-breakpoint-load
    dape-breakpoint-save
-   dape-cwd
    dape-mouse-breakpoint-toggle)
   :config
+  ;; Параметры сборки и запуска задаются через `dape-command'
+  ;; в .dir-locals.el или персональном .dir-locals-2.el проекта.
+
   ;; Сохранять breakpoints между перезапусками Emacs.
   (add-hook 'kill-emacs-hook #'dape-breakpoint-save)
   (add-hook 'after-init-hook #'dape-breakpoint-load)
