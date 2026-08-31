@@ -218,11 +218,19 @@
   :ensure t
   :commands magit-status)
 
+(defun my-treemacs-toggle-current-project ()
+  "Toggle Treemacs for the project containing the current buffer."
+  (interactive)
+  (require 'treemacs)
+  (if (eq (treemacs-current-visibility) 'visible)
+      (treemacs)
+    (treemacs-add-and-display-current-project-exclusively)))
+
 ;; Treemacs: дерево текущего проекта со слежением за активным буфером.
 (use-package treemacs
   :ensure t
   :defer t
-  :bind (("C-c e" . treemacs))
+  :bind (("C-c e" . my-treemacs-toggle-current-project))
   :custom
   (treemacs-follow-after-init t)
   :config
