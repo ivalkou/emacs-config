@@ -930,9 +930,7 @@ registered for a cached Dape restart."
   "R" #'my-xcode-restart-dape "d" #'my-xcode-dape-debug
   "C-g" #'keyboard-quit)
 
-(keymap-unset global-map "C-c x")
-(with-eval-after-load 'swift-mode
-  (keymap-set swift-mode-map "C-c x" my-xcode-prefix-map))
+(keymap-set global-map "C-c x" my-xcode-prefix-map)
 
 (with-eval-after-load 'which-key
   (which-key-add-keymap-based-replacements
