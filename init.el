@@ -523,6 +523,33 @@
               [left-fringe C-mouse-1]
               #'dape-mouse-breakpoint-toggle))
 
+;; Компактное меню основных команд отладчика.
+(use-package transient
+  :ensure nil
+  :after dape
+  :bind ("C-c d" . my-dape-menu)
+  :config
+  (transient-define-prefix my-dape-menu ()
+    "Show Dape debugger controls."
+    [["Execution"
+      ("c" "Continue" dape-continue)
+      ("p" "Pause" dape-pause)
+      ("n" "Next" dape-next)
+      ("s" "Step in" dape-step-in)
+      ("o" "Step out" dape-step-out)
+      ("u" "Run until" dape-until)]
+     ["Session"
+      ("r" "Restart" dape-restart)
+      ("q" "Stop" dape-quit)
+      ("R" "REPL" dape-repl)
+      ("i" "Info" dape-info)
+      ("x" "Evaluate" dape-evaluate-expression)]
+     ["Breakpoints"
+      ("b" "Toggle" dape-breakpoint-toggle)
+      ("B" "Remove all" dape-breakpoint-remove-all)
+      ("e" "Conditional" dape-breakpoint-expression)
+      ("l" "Logpoint" dape-breakpoint-log)]]))
+
 ;; repeat-mode позволяет несколько раз подряд вызывать команды,
 ;; относящиеся к одной группе, одиночными клавишами.
 ;; В частности, это удобно в отладке: next / step / continue и т. п.
