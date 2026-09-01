@@ -2,6 +2,7 @@
 
 ;; Xcode: project-scoped scheme/device selection and Dape launch assembly.
 (require 'cl-lib)
+(require 'compile)
 (require 'json)
 (require 'map)
 (require 'project)
@@ -33,6 +34,31 @@
          (state (plist-put (copy-sequence (my-xcode--state root)) key value)))
     (puthash root state my-xcode-project-selections)
     value))
+
+(defun my-xcode--cache-get (cache-key key)
+  "Return KEY from the project-local alist stored under CACHE-KEY."
+  (cdr (assoc key (plist-get (my-xcode--state) cache-key))))
+
+(defun my-xcode--cache-put (cache-key key value)
+  "Store VALUE under KEY in the project-local CACHE-KEY alist."
+  (let ((cache (plist-get (my-xcode--state) cache-key)))
+    (my-xcode--state-put
+     cache-key
+     (cons (cons key value) (assoc-delete-all key cache #'equal))))
+  value)
+
+(defun my-xcode--invalidate-product-cache ()
+  "Discard products derived from previous Xcode selections."
+  (my-xcode--state-put :products nil))
+
+(defun my-xcode--selection-cache-key (selection)
+  "Return a stable cache key for SELECTION's derived app product."
+  (let ((destination (plist-get selection :destination)))
+    (list (my-xcode--container)
+          (plist-get selection :scheme)
+          (plist-get selection :configuration)
+          (plist-get destination :kind)
+          (plist-get destination :id))))
 
 (defun my-xcode--discoverable-path-p (path)
   "Return non-nil when PATH may contain a user Xcode container."
@@ -243,6 +269,7 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
                      (and current (my-xcode--destination-label current))))
             (destination (cdr (assoc choice choices))))
        (my-xcode--state-put :destination destination)
+       (my-xcode--invalidate-product-cache)
        (message "Xcode destination: %s" choice)
        (when callback (funcall callback destination))))))
 
@@ -328,7 +355,7 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
                            when info collect info)))
 
 (defun my-xcode--scheme-infos-async (callback &optional error-callback)
-  "Pass launchable schemes to CALLBACK, or invoke ERROR-CALLBACK."
+  "Pass every Xcode scheme to CALLBACK, enriched with local metadata."
   (my-xcode--process-json-async
    "listing schemes"
    (append '("xcrun" "xcodebuild") (my-xcode--container-arguments)
@@ -336,9 +363,16 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
    (lambda (json)
      (let* ((schemes (my-xcode--json-get "schemes"
                                          (my-xcode--container-json-object json)))
-            (infos (seq-filter
-                    (lambda (info) (member (plist-get info :scheme) schemes))
-                    (my-xcode--local-scheme-infos))))
+            (local-infos (my-xcode--local-scheme-infos))
+            (infos
+             (mapcar
+              (lambda (scheme)
+                (or (seq-find
+                     (lambda (info)
+                       (equal (plist-get info :scheme) scheme))
+                     local-infos)
+                    (list :scheme scheme)))
+              schemes)))
        (my-xcode--state-put :scheme-infos infos)
        (funcall callback infos)))
    nil error-callback))
@@ -349,14 +383,16 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
             (plist-get (my-xcode--state) :scheme-infos)))
 
 (defun my-xcode-select-scheme (&optional callback error-callback)
-  "Select a runnable scheme, then invoke CALLBACK or ERROR-CALLBACK."
+  "Select an Xcode scheme, then invoke CALLBACK or ERROR-CALLBACK."
   (interactive)
+  (my-xcode--state-put :configurations nil)
+  (my-xcode--invalidate-product-cache)
   (my-xcode--scheme-infos-async
    (lambda (infos)
      (let ((schemes (mapcar (lambda (info) (plist-get info :scheme)) infos))
            (current (plist-get (my-xcode--state) :scheme)))
-       (unless schemes (user-error "The Xcode container has no launchable shared schemes"))
-       (let ((scheme (completing-read "Runnable Xcode scheme: " schemes nil t
+       (unless schemes (user-error "The Xcode container reports no schemes"))
+       (let ((scheme (completing-read "Xcode scheme: " schemes nil t
                                       nil nil current)))
          (my-xcode--state-put :scheme scheme)
          (unless (equal scheme current) (my-xcode--state-put :configuration nil))
@@ -377,20 +413,31 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
            (my-xcode-select-scheme callback error-callback)))
        error-callback))))
 
-(defun my-xcode--configurations-async (scheme callback &optional error-callback)
-  "Pass configurations for SCHEME to CALLBACK, or invoke ERROR-CALLBACK."
-  (let ((project (plist-get (my-xcode--scheme-info scheme) :project)))
-    (my-xcode--process-json-async
-     "listing configurations"
-     (list "xcrun" "xcodebuild" "-project" project "-list" "-json")
-     (lambda (json)
-       (let ((configurations
-              (my-xcode--json-get "configurations"
-                                  (my-xcode--json-get "project" json))))
-         (unless configurations
-           (user-error "Project %s reports no build configurations" project))
-         (funcall callback configurations)))
-     nil error-callback)))
+(defun my-xcode--configurations-async
+    (scheme callback &optional error-callback refresh)
+  "Pass configurations for SCHEME to CALLBACK, or invoke ERROR-CALLBACK.
+Reuse the project cache unless REFRESH is non-nil."
+  (if-let* ((cached (and (not refresh)
+                         (my-xcode--cache-get :configurations scheme))))
+      (funcall callback cached)
+    (let ((project (plist-get (my-xcode--scheme-info scheme) :project)))
+      (if (not project)
+          (let ((configuration
+                 (or (plist-get (my-xcode--state) :configuration) "Debug")))
+            (my-xcode--cache-put :configurations scheme (list configuration))
+            (funcall callback (list configuration)))
+        (my-xcode--process-json-async
+         "listing configurations"
+         (list "xcrun" "xcodebuild" "-project" project "-list" "-json")
+         (lambda (json)
+           (let ((configurations
+                  (my-xcode--json-get "configurations"
+                                      (my-xcode--json-get "project" json))))
+             (unless configurations
+               (user-error "Project %s reports no build configurations" project))
+             (my-xcode--cache-put :configurations scheme configurations)
+             (funcall callback configurations)))
+         nil error-callback)))))
 
 (defun my-xcode-select-configuration (&optional callback)
   "Select an actual configuration asynchronously, then invoke CALLBACK."
@@ -405,8 +452,10 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
                                 nil nil
                                 (plist-get (my-xcode--state) :configuration))))
           (my-xcode--state-put :configuration configuration)
+          (my-xcode--invalidate-product-cache)
           (message "Xcode configuration: %s" configuration)
-          (when callback (funcall callback configuration))))))))
+          (when callback (funcall callback configuration))))
+      nil t))))
 
 (defun my-xcode--ensure-configuration
     (scheme callback &optional error-callback)
@@ -446,56 +495,106 @@ Invoke ERROR-CALLBACK after a process or JSON parsing failure."
          (my-xcode-select-destination #'with-destination))))))
 
 (defun my-xcode--product-from-settings (entries scheme-info)
-  "Extract the launch product from ENTRIES using SCHEME-INFO."
-  (let* ((target (plist-get scheme-info :target))
+  "Extract a runnable app product from ENTRIES using SCHEME-INFO when possible."
+  (let* ((scheme (plist-get scheme-info :scheme))
+         (target (plist-get scheme-info :target))
          (buildable-name (plist-get scheme-info :buildable-name))
-         (entry (seq-find
+         (app-entries
+          (seq-filter
+           (lambda (candidate)
+             (equal (my-xcode--json-get
+                     "WRAPPER_EXTENSION"
+                     (my-xcode--json-get "buildSettings" candidate))
+                    "app"))
+           entries))
+         (entry
+          (or
+           (and target buildable-name
+                (seq-find
                  (lambda (candidate)
-                   (let ((settings (my-xcode--json-get "buildSettings" candidate)))
-                     (and (equal (or (my-xcode--json-get "target" candidate)
-                                     (my-xcode--json-get "TARGET_NAME" settings)) target)
-                          (equal (my-xcode--json-get "WRAPPER_EXTENSION" settings) "app")
-                          (equal (my-xcode--json-get "FULL_PRODUCT_NAME" settings)
-                                 buildable-name))))
-                 entries))
-         (settings (and entry (my-xcode--json-get "buildSettings" entry)))
-         (full-name (and settings (my-xcode--json-get "FULL_PRODUCT_NAME" settings)))
-         (build-dir (and settings (my-xcode--json-get "TARGET_BUILD_DIR" settings)))
-         (executable (and settings (my-xcode--json-get "EXECUTABLE_PATH" settings)))
-         (bundle-id (and settings
-                         (my-xcode--json-get "PRODUCT_BUNDLE_IDENTIFIER" settings))))
-    (unless (seq-every-p (lambda (value)
-                           (and (stringp value) (not (string-empty-p value))))
-                         (list full-name build-dir executable bundle-id))
-      (user-error "Incomplete app build settings for scheme %s"
-                  (plist-get scheme-info :scheme)))
-    (list :app (expand-file-name full-name build-dir)
-          :program (expand-file-name executable build-dir)
-          :executable-name (file-name-nondirectory executable)
-          :bundle-id bundle-id :target target :buildable-name buildable-name)))
+                   (let ((settings
+                          (my-xcode--json-get "buildSettings" candidate)))
+                     (and
+                      (equal (or (my-xcode--json-get "target" candidate)
+                                 (my-xcode--json-get "TARGET_NAME" settings))
+                             target)
+                      (equal (my-xcode--json-get "FULL_PRODUCT_NAME" settings)
+                             buildable-name))))
+                 app-entries))
+           (and (= (length app-entries) 1) (car app-entries))
+           (seq-find
+            (lambda (candidate)
+              (let ((settings (my-xcode--json-get "buildSettings" candidate)))
+                (equal (or (my-xcode--json-get "target" candidate)
+                           (my-xcode--json-get "TARGET_NAME" settings))
+                       scheme)))
+            app-entries)
+           (when app-entries
+             (let* ((choices
+                     (mapcar
+                      (lambda (candidate)
+                        (let* ((settings
+                                (my-xcode--json-get "buildSettings" candidate))
+                               (name
+                                (or (my-xcode--json-get "target" candidate)
+                                    (my-xcode--json-get "TARGET_NAME" settings)
+                                    (my-xcode--json-get "FULL_PRODUCT_NAME"
+                                                        settings))))
+                          (cons name candidate)))
+                      app-entries))
+                    (choice (completing-read
+                             (format "Runnable product for %s: " scheme)
+                             choices nil t)))
+               (cdr (assoc choice choices)))))))
+    (unless entry
+      (user-error "Scheme %s has no runnable app product" scheme))
+    (let* ((settings (my-xcode--json-get "buildSettings" entry))
+           (full-name (my-xcode--json-get "FULL_PRODUCT_NAME" settings))
+           (build-dir (my-xcode--json-get "TARGET_BUILD_DIR" settings))
+           (executable (my-xcode--json-get "EXECUTABLE_PATH" settings))
+           (bundle-id (my-xcode--json-get "PRODUCT_BUNDLE_IDENTIFIER" settings))
+           (resolved-target
+            (or (my-xcode--json-get "target" entry)
+                (my-xcode--json-get "TARGET_NAME" settings))))
+      (unless (seq-every-p (lambda (value)
+                             (and (stringp value) (not (string-empty-p value))))
+                           (list full-name build-dir executable bundle-id))
+        (user-error "Incomplete app build settings for scheme %s" scheme))
+      (list :app (expand-file-name full-name build-dir)
+            :program (expand-file-name executable build-dir)
+            :executable-name (file-name-nondirectory executable)
+            :bundle-id bundle-id :target resolved-target
+            :buildable-name full-name))))
 
 (defun my-xcode--product-settings-async
-    (selection callback &optional error-callback)
-  "Resolve SELECTION's product via CALLBACK, or invoke ERROR-CALLBACK."
-  (let* ((scheme (plist-get selection :scheme))
-         (destination (plist-get selection :destination))
-         (configuration (plist-get selection :configuration))
-         (scheme-info (my-xcode--scheme-info scheme)))
-    (my-xcode--process-json-async
-     "resolving app product"
-     (append '("xcrun" "xcodebuild") (my-xcode--container-arguments)
-             (list "-scheme" scheme "-configuration" configuration
-                   "-destination" (my-xcode--destination-spec destination)
-                   "-showBuildSettings" "-json"))
-     (lambda (entries)
-       (condition-case error
-           (funcall callback
-                    (my-xcode--product-from-settings entries scheme-info))
-         (error
-          (message "Xcode product resolution failed: %s"
-                   (error-message-string error))
-          (when error-callback (funcall error-callback)))))
-     nil error-callback)))
+    (selection callback &optional error-callback refresh)
+  "Resolve SELECTION's product via CALLBACK, or invoke ERROR-CALLBACK.
+Reuse the project cache unless REFRESH is non-nil."
+  (let* ((key (my-xcode--selection-cache-key selection))
+         (cached (and (not refresh) (my-xcode--cache-get :products key))))
+    (if cached
+        (funcall callback cached)
+      (let* ((scheme (plist-get selection :scheme))
+             (destination (plist-get selection :destination))
+             (configuration (plist-get selection :configuration))
+             (scheme-info (my-xcode--scheme-info scheme)))
+        (my-xcode--process-json-async
+         "resolving app product"
+         (append '("xcrun" "xcodebuild") (my-xcode--container-arguments)
+                 (list "-scheme" scheme "-configuration" configuration
+                       "-destination" (my-xcode--destination-spec destination)
+                       "-showBuildSettings" "-json"))
+         (lambda (entries)
+           (condition-case error
+               (let ((product
+                      (my-xcode--product-from-settings entries scheme-info)))
+                 (my-xcode--cache-put :products key product)
+                 (funcall callback product))
+             (error
+              (message "Xcode product resolution failed: %s"
+                       (error-message-string error))
+              (when error-callback (funcall error-callback)))))
+         nil error-callback)))))
 
 (defun my-xcode--shell-command (arguments)
   "Quote ARGUMENTS as one shell command."
@@ -643,11 +742,149 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
           :pid-key (and pid-file
                         (my-xcode--device-pid-key destination product)))))
 
-(defun my-xcode--start-compilation (name commands)
-  "Run COMMANDS asynchronously in a compilation buffer named NAME."
-  (let ((default-directory (my-xcode--project-root)))
-    (compilation-start (my-xcode--command-chain commands) 'compilation-mode
-                       (lambda (_) (format "*Xcode %s*" name)))))
+(defconst my-xcode--build-operation-regexp
+  "^[[:upper:]][[:alnum:]_.+/-]*\\(?:[ \t].*\\)?$"
+  "Regexp matching top-level operations in xcodebuild output.")
+
+(defvar my-xcode--build-status nil
+  "Status plist for the latest Xcode debug compilation.")
+
+(defvar my-xcode--build-mode-line-timer nil
+  "Timer refreshing elapsed Xcode build time in the mode line.")
+
+(defvar-local my-xcode--build-operation-count 0
+  "Number of xcodebuild operations observed in this compilation buffer.")
+
+(defun my-xcode--format-build-elapsed (seconds)
+  "Format elapsed SECONDS as minutes and seconds."
+  (let ((seconds (max 0 (floor seconds))))
+    (format "%02d:%02d" (/ seconds 60) (% seconds 60))))
+
+(defun my-xcode--build-mode-line ()
+  "Return the current Xcode build status for `mode-line-misc-info'."
+  (when-let* ((status my-xcode--build-status)
+              (buffer (plist-get status :buffer))
+              ((buffer-live-p buffer)))
+    (let* ((started (plist-get status :started))
+           (elapsed (or (plist-get status :elapsed)
+                        (- (float-time) started)))
+           (count (buffer-local-value
+                   'my-xcode--build-operation-count buffer)))
+      (format "[xcode: %s %d · %s]"
+              (symbol-name (plist-get status :state)) count
+              (my-xcode--format-build-elapsed elapsed)))))
+
+(add-to-list 'global-mode-string '(:eval (my-xcode--build-mode-line)) t)
+
+(defun my-xcode--stop-build-mode-line-timer ()
+  "Stop the Xcode build mode-line refresh timer."
+  (when (timerp my-xcode--build-mode-line-timer)
+    (cancel-timer my-xcode--build-mode-line-timer))
+  (setq my-xcode--build-mode-line-timer nil))
+
+(defun my-xcode--start-build-status (buffer)
+  "Start displaying build progress for compilation BUFFER."
+  (my-xcode--stop-build-mode-line-timer)
+  (with-current-buffer buffer
+    (setq-local my-xcode--build-operation-count 0))
+  (setq my-xcode--build-status
+        (list :buffer buffer :state 'building :started (float-time)))
+  (setq my-xcode--build-mode-line-timer
+        (run-at-time 1 1 #'force-mode-line-update t))
+  (force-mode-line-update t))
+
+(defun my-xcode--count-build-operations ()
+  "Count new top-level xcodebuild operations in compilation output."
+  (when (and compilation-filter-start
+             (eq (current-buffer)
+                 (plist-get my-xcode--build-status :buffer))
+             (eq (plist-get my-xcode--build-status :state) 'building))
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char compilation-filter-start)
+        (while (re-search-forward my-xcode--build-operation-regexp
+                                  (point-max) t)
+          (cl-incf my-xcode--build-operation-count))))
+    (force-mode-line-update t)))
+
+(defun my-xcode--finish-build-status (buffer result)
+  "Finish build status for BUFFER according to compilation RESULT."
+  (when (eq buffer (plist-get my-xcode--build-status :buffer))
+    (my-xcode--stop-build-mode-line-timer)
+    (let ((elapsed (- (float-time)
+                      (plist-get my-xcode--build-status :started))))
+      (if (equal result "finished\n")
+          (setq my-xcode--build-status nil)
+        (setq my-xcode--build-status
+              (list :buffer buffer
+                    :state (if (string-match-p "killed" result)
+                               'stopped
+                             'failed)
+                    :started (plist-get my-xcode--build-status :started)
+                    :elapsed elapsed))))
+    (force-mode-line-update t)))
+
+(defun my-xcode--build-buffer-killed ()
+  "Stop active build status when its compilation buffer is killed."
+  (when (and (eq (current-buffer)
+                 (plist-get my-xcode--build-status :buffer))
+             (eq (plist-get my-xcode--build-status :state) 'building))
+    (my-xcode--finish-build-status (current-buffer) "killed\n")))
+
+(defun my-xcode--track-compilation-buffer (buffer)
+  "Track hidden Xcode compilation BUFFER in the mode line."
+  (my-xcode--state-put :last-build-buffer buffer)
+  (with-current-buffer buffer
+    (add-hook 'compilation-filter-hook
+              #'my-xcode--count-build-operations nil t)
+    (add-hook 'compilation-finish-functions
+              #'my-xcode--finish-build-status t t)
+    (add-hook 'kill-buffer-hook #'my-xcode--build-buffer-killed nil t))
+  (my-xcode--start-build-status buffer)
+  buffer)
+
+(defun my-xcode--compile-for-dape (command)
+  "Run Dape compilation COMMAND without displaying its buffer."
+  (let* ((root (my-xcode--project-root))
+         (project-name (file-name-nondirectory (directory-file-name root)))
+         (compilation-buffer-name-function
+          (lambda (_) (format "*Xcode Debug %s*" project-name)))
+         (display-buffer-overriding-action
+          '((display-buffer-no-window) (allow-no-window . t))))
+    (my-xcode--track-compilation-buffer (compile command))))
+
+(defun my-xcode-dape-compile (command)
+  "Run Xcodebuild COMMAND hidden with status, delegating other builds normally."
+  (if (string-match-p "\\bxcodebuild\\b" command)
+      (my-xcode--compile-for-dape command)
+    (compile command)))
+
+(defun my-xcode-toggle-build-output ()
+  "Toggle the latest tracked Xcode compilation buffer for this project."
+  (interactive)
+  (if-let* ((buffer (plist-get (my-xcode--state) :last-build-buffer))
+            ((buffer-live-p buffer)))
+      (if-let* ((window (get-buffer-window buffer)))
+          (quit-window nil window)
+        (pop-to-buffer buffer))
+    (user-error "No tracked Xcode build output for this project")))
+
+(defun my-xcode--start-compilation (name commands &optional visible)
+  "Run COMMANDS in an Xcode compilation buffer named NAME.
+Keep the buffer hidden and show build status unless VISIBLE is non-nil."
+  (let* ((root (my-xcode--project-root))
+         (project-name (file-name-nondirectory (directory-file-name root)))
+         (default-directory root)
+         (name-function
+          (lambda (_) (format "*Xcode %s %s*" name project-name)))
+         (command (my-xcode--command-chain commands)))
+    (if visible
+        (compilation-start command 'compilation-mode name-function)
+      (let ((display-buffer-overriding-action
+             '((display-buffer-no-window) (allow-no-window . t))))
+        (my-xcode--track-compilation-buffer
+         (compilation-start command 'compilation-mode name-function))))))
 
 (defun my-xcode-build ()
   "Build the selected scheme, destination and configuration asynchronously."
@@ -670,7 +907,7 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
                           :commands)))))))
 
 (defun my-xcode--dape-command (selection product)
-  "Build a Dape command for SELECTION and PRODUCT."
+  "Build Dape command and session metadata for SELECTION and PRODUCT."
   (let* ((destination (plist-get selection :destination))
          (simulator-p (eq (plist-get destination :kind) 'simulator))
          (core-id (plist-get destination :core-device-id))
@@ -681,43 +918,49 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
                     command-cwd ,(my-xcode--project-root)
                     compile ,(my-xcode--command-chain (plist-get workflow :commands))
                     :type "lldb-dap" :request "attach"
-                    :cwd ,(my-xcode--project-root) :program ,(plist-get product :program))))
-    (unless simulator-p
-      (my-xcode--state-put
-       :last-dape-pid
-       (list :destination destination :product product :file pid-file)))
-    (if simulator-p
-        (append base
-                `(:initCommands
-                  ["platform select ios-simulator"
-                   ,(format "platform connect %s"
-                            (plist-get destination :id))]))
-      (append base
-              `(:attachCommands
-                [,(format "device select %s" core-id)
-                 ,(format "script import lldb, pathlib; pid = pathlib.Path(%S).read_text().strip(); lldb.debugger.HandleCommand('device process attach -p ' + pid)"
-                          pid-file)])))))
+                    :cwd ,(my-xcode--project-root) :program ,(plist-get product :program)))
+         (command
+          (if simulator-p
+              (append base
+                      `(:initCommands
+                        ["platform select ios-simulator"
+                         ,(format "platform connect %s"
+                                  (plist-get destination :id))]))
+            (append base
+                    `(:attachCommands
+                      [,(format "device select %s" core-id)
+                       ,(format "script import lldb, pathlib; pid = pathlib.Path(%S).read_text().strip(); lldb.debugger.HandleCommand('device process attach -p ' + pid)"
+                                pid-file)])))))
+    (list :command command
+          :session (list :selection (copy-tree selection)
+                         :destination (copy-tree destination)
+                         :product (copy-tree product)
+                         :pid-file pid-file))))
 
 (defun my-xcode--ensure-last-dape-pid-registered ()
-  "Ensure the cached physical Dape PID path remains discoverable."
-  (when-let* ((registration (plist-get (my-xcode--state) :last-dape-pid))
-              (destination (plist-get registration :destination))
-              (product (plist-get registration :product))
-              (pid-file (plist-get registration :file)))
+  "Ensure the last physical Dape session's PID path remains discoverable."
+  (when-let* ((session (plist-get (my-xcode--state) :last-dape-session))
+              (destination (plist-get session :destination))
+              (product (plist-get session :product))
+              (pid-file (plist-get session :pid-file)))
     (my-xcode--register-device-pid-candidate
      destination product pid-file)))
 
 (defun my-xcode-dape-debug ()
   "Build, launch and debug the selected Xcode app through Dape."
   (interactive)
+  (require 'dape)
   (my-xcode--with-selection
    (lambda (selection)
      (my-xcode--product-settings-async
       selection
       (lambda (product)
-        (let ((command (my-xcode--dape-command selection product)))
+        (let* ((launch (my-xcode--dape-command selection product))
+               (command (plist-get launch :command))
+               (session (plist-put (plist-get launch :session)
+                                   :command command)))
           (setq-local dape-command command)
-          (my-xcode--state-put :last-dape-command command)
+          (my-xcode--state-put :last-dape-session session)
           (dape (cdr command))))))))
 
 (defun my-xcode--display-info (container state &optional product)
@@ -842,51 +1085,31 @@ registered for a cached Dape restart."
                      (funcall exit-callback process)))))))
 
 (defun my-xcode-stop ()
-  "Stop active Dape sessions and best-effort terminate the selected app."
+  "Stop Dape immediately and terminate the app from cached session metadata."
   (interactive)
   (require 'dape)
-  (cl-labels
-      ((quit-only (message-text)
-         (when dape--connections (dape-quit))
-         (message "%s" message-text)))
-    (let ((state (my-xcode--state)))
-      (if (not (and (plist-get state :scheme)
-                    (plist-get state :destination)
-                    (plist-get state :configuration)))
-          (quit-only "Dape stopped; no complete Xcode app selection")
-        (my-xcode--ensure-scheme
-         (lambda (scheme)
-           (let ((destination (plist-get (my-xcode--state) :destination)))
-             (my-xcode--ensure-configuration
-              scheme
-              (lambda (configuration)
-                (let ((selection (list :scheme scheme :destination destination
-                                       :configuration configuration)))
-                  (my-xcode--product-settings-async
-                   selection
-                   (lambda (product)
-                     (let* ((termination
-                             (condition-case error
-                                 (my-xcode--termination-spec destination product)
-                               (user-error
-                                (message "%s" (error-message-string error))
-                                nil)))
-                            (command (plist-get termination :command))
-                            (pid-file (plist-get termination :pid-file)))
-                       (when dape--connections (dape-quit))
-                       (if command
-                           (my-xcode--start-short-process
-                            "Stop" command
-                            (lambda (process)
-                              (when (zerop (process-exit-status process))
-                                (my-xcode--consume-device-pid-file pid-file))))
-                         (message "Dape stopped; app termination unavailable"))))
-                   (lambda ()
-                     (quit-only
-                      "Dape stopped; app product resolution failed")))))
-              (lambda ()
-                (quit-only "Dape stopped; configuration query failed")))))
-         (lambda () (quit-only "Dape stopped; scheme query failed")))))))
+  (let* ((session (plist-get (my-xcode--state) :last-dape-session))
+         (destination (plist-get session :destination))
+         (product (plist-get session :product)))
+    (when dape--connections (dape-quit))
+    (if (not (and destination product))
+        (message "Dape stopped; no cached Xcode session to terminate")
+      (my-xcode--ensure-last-dape-pid-registered)
+      (let* ((termination
+              (condition-case error
+                  (my-xcode--termination-spec destination product)
+                (user-error
+                 (message "%s" (error-message-string error))
+                 nil)))
+             (command (plist-get termination :command))
+             (pid-file (plist-get termination :pid-file)))
+        (if command
+            (my-xcode--start-short-process
+             "Stop" command
+             (lambda (process)
+               (when (zerop (process-exit-status process))
+                 (my-xcode--consume-device-pid-file pid-file))))
+          (message "Dape stopped; app termination unavailable"))))))
 
 (defun my-xcode-stream-logs ()
   "Stream logs for the selected simulator app asynchronously."
@@ -904,7 +1127,8 @@ registered for a cached Dape restart."
                               (plist-get destination :id)
                               "log" "stream" "--style" "compact"
                               "--level" "debug" "--process"
-                              (plist-get product :executable-name))))))))))
+                              (plist-get product :executable-name)))
+           t)))))))
 
 (defun my-xcode-restart-dape ()
   "Restart the current, most recent, or last project Xcode Dape session."
@@ -914,7 +1138,8 @@ registered for a cached Dape restart."
   (condition-case error
       (call-interactively #'dape-restart)
     (user-error
-     (let ((command (plist-get (my-xcode--state) :last-dape-command)))
+     (let* ((session (plist-get (my-xcode--state) :last-dape-session))
+            (command (plist-get session :command)))
        (if (and command
                 (string-match-p "Unable to derive session to restart"
                                 (error-message-string error)))
@@ -927,6 +1152,7 @@ registered for a cached Dape restart."
   "c" #'my-xcode-select-configuration "b" #'my-xcode-build
   "r" #'my-xcode-run "i" #'my-xcode-info "q" #'my-xcode-stop
   "o" #'my-xcode-open-container "l" #'my-xcode-stream-logs
+  "v" #'my-xcode-toggle-build-output
   "R" #'my-xcode-restart-dape "d" #'my-xcode-dape-debug
   "C-g" #'keyboard-quit)
 
@@ -938,7 +1164,8 @@ registered for a cached Dape restart."
     "t" "target device" "s" "scheme" "c" "configuration" "b" "build"
     "r" "build, install and run" "i" "show selection and product"
     "q" "stop debugger and app" "o" "open in Xcode"
-    "l" "stream app logs" "R" "restart Dape session" "d" "debug with Dape"))
+    "l" "stream app logs" "v" "debug build output"
+    "R" "restart Dape session" "d" "debug with Dape"))
 
 (provide 'my-xcode)
 

@@ -397,12 +397,13 @@
             (concat llvm-bin path-separator path))))
 
 ;; Xcode build, run and debug commands for Swift projects.
-(require 'my-xcode (expand-file-name "my-xcode.el" user-emacs-directory))
+(load (expand-file-name "my-xcode.el" user-emacs-directory) nil nil t)
 ;; Debug Adapter Protocol — отладка через lldb-dap.
 (use-package dape
   :ensure t
   :custom
   (dape-request-timeout 60)
+  (dape-compile-function #'my-xcode-dape-compile)
   :functions
   (dape-breakpoint-load
    dape-breakpoint-save
