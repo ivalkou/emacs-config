@@ -304,6 +304,59 @@
   ;; Автоматически выключать сервер при закрытии последнего управляемого буфера.
   (setq eglot-autoshutdown t))
 
+(defun my-consult-eglot--generated-swift-symbol-p (symbol-info)
+  "Return non-nil when SYMBOL-INFO names a Swift mangled symbol."
+  (when-let* ((name (plist-get symbol-info :name)))
+    (string-match-p "\\`_?\\$s" name)))
+
+(defun my-consult-eglot--filter-generated-symbols (original servers)
+  "Remove generated Swift symbols from ORIGINAL source using SERVERS."
+  (let ((source (funcall original servers)))
+    (lambda (sink)
+      (let ((handler (funcall source sink)))
+        (lambda (action)
+          (if (stringp action)
+              (let ((request (symbol-function 'jsonrpc-async-request)))
+                (cl-letf (((symbol-function 'jsonrpc-async-request)
+                           (lambda (connection method params &rest arguments)
+                             (when (and (eq method :workspace/symbol)
+                                        (assq 'swift-mode
+                                              (eglot--languages connection)))
+                               (when-let* ((success
+                                            (plist-get arguments :success-fn)))
+                                 (setq arguments
+                                       (plist-put
+                                        arguments :success-fn
+                                        (lambda (response)
+                                          (funcall
+                                           success
+                                           (seq-remove
+                                            #'my-consult-eglot--generated-swift-symbol-p
+                                            response)))))))
+                             (apply request connection method params arguments))))
+                  (funcall handler action)))
+            (funcall handler action)))))))
+
+;; Поиск символов во всём Eglot workspace через Consult.
+(use-package consult-eglot
+  :ensure t
+  :after (consult eglot)
+  :bind ("M-g s" . consult-eglot-symbols)
+  :config
+  ;; SourceKit-LSP can expose Swift ABI names such as `$s4App...'.  They are
+  ;; compiler artifacts rather than source declarations and obstruct search.
+  (advice-remove 'consult-eglot--make-async-source
+                 #'my-consult-eglot--filter-generated-symbols)
+  (advice-add 'consult-eglot--make-async-source :around
+              #'my-consult-eglot--filter-generated-symbols))
+
+;; Embark actions и export результатов `consult-eglot-symbols' в grep-буфер.
+(use-package consult-eglot-embark
+  :ensure t
+  :after (embark consult-eglot)
+  :config
+  (consult-eglot-embark-mode 1))
+
 ;; Vterm: быстрый терминал внутри Emacs на основе libvterm.
 ;; Требует cmake и libtool. На macOS: brew install cmake libtool.
 (use-package vterm
@@ -398,12 +451,28 @@
 
 ;; Xcode build, run and debug commands for Swift projects.
 (load (expand-file-name "my-xcode.el" user-emacs-directory) nil nil t)
+
+(defun my-dape-style-stopped-source ()
+  "Use the Xcode-like execution marker in the current source buffer."
+  (let ((indicators (copy-tree fringe-indicator-alist)))
+    (setf (alist-get 'overlay-arrow indicators) 'my-dape-current-line)
+    (setq-local fringe-indicator-alist indicators)))
+
+(defun my-dape-breakpoint-symbol-indicator
+    (original string bitmap face)
+  "Render Dape breakpoints as STRING while preserving other indicators."
+  (if (eq bitmap 'breakpoint)
+      (let ((window-system nil))
+        (funcall original string bitmap face))
+    (funcall original string bitmap face)))
+
 ;; Debug Adapter Protocol — отладка через lldb-dap.
 (use-package dape
   :ensure t
   :custom
   (dape-request-timeout 60)
   (dape-compile-function #'my-xcode-dape-compile)
+  (dape-breakpoint-margin-string "●")
   :functions
   (dape-breakpoint-load
    dape-breakpoint-save
@@ -411,8 +480,38 @@
    dape-quit
    dape-restart)
   :config
-  ;; Xcode commands assemble `dape-command' from discovered project state.
+  ;; Xcode-like stopped line: a green-tinted row and a wide execution arrow.
+  (require 'color)
+  (define-fringe-bitmap 'my-dape-current-line
+    [#x80 #xc0 #xe0 #xf0 #xf8 #xfc #xfe #xff
+     #xfe #xfc #xf8 #xf0 #xe0 #xc0 #x80]
+    15 8 'center)
+  (let* ((hex-to-rgb
+          (lambda (hex)
+            (mapcar (lambda (offset)
+                      (/ (string-to-number
+                          (substring hex offset (+ offset 2)) 16)
+                         255.0))
+                    '(1 3 5))))
+         (base (funcall hex-to-rgb (catppuccin-color 'base)))
+         (green (funcall hex-to-rgb (catppuccin-color 'green)))
+         (background
+          (apply #'color-rgb-to-hex
+                 (append (color-blend green base 0.18) '(2)))))
+    (set-face-attribute 'dape-source-line-face nil
+                        :background background
+                        :extend t))
+  (add-hook 'dape-display-source-hook #'my-dape-style-stopped-source)
 
+  ;; A fringe can only display bitmaps, so render breakpoint indicators in
+  ;; Dape's left margin instead.  Flymake and mouse handling keep their fringe.
+  (advice-remove 'dape--indicator #'my-dape-breakpoint-symbol-indicator)
+  (advice-add 'dape--indicator :around
+              #'my-dape-breakpoint-symbol-indicator)
+  (set-face-attribute 'dape-breakpoint-face nil
+                      :foreground (catppuccin-color 'blue))
+  (set-face-attribute 'dape-breakpoint-until-face nil
+                      :foreground (catppuccin-color 'green))
   ;; Сохранять breakpoints между перезапусками Emacs.
   (add-hook 'kill-emacs-hook #'dape-breakpoint-save)
   (add-hook 'after-init-hook #'dape-breakpoint-load)
