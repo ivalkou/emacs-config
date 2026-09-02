@@ -116,6 +116,15 @@
      ((string-suffix-p ".xcodeproj" container) (list "-project" container))
      (t (user-error "Unsupported Xcode container: %s" container)))))
 
+(defun my-xcode--build-server-command (container scheme)
+  "Return xcode-build-server command for CONTAINER and SCHEME."
+  (let ((executable (executable-find "xcode-build-server")))
+    (unless executable
+      (user-error "xcode-build-server is not available in exec-path"))
+    (append (list executable "config")
+            (my-xcode--container-arguments container)
+            (list "-scheme" scheme))))
+
 (defun my-xcode--json-get (key object)
   "Read string KEY from JSON alist OBJECT."
   (alist-get key object nil nil #'string=))
@@ -894,6 +903,24 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
      (my-xcode--start-compilation "Build"
                                   (list (my-xcode--build-command selection))))))
 
+(defun my-xcode-generate-build-server ()
+  "Generate buildServer.json for the selected Xcode container and scheme."
+  (interactive)
+  (let ((root (my-xcode--project-root))
+        (container (my-xcode--container)))
+    (my-xcode--ensure-scheme
+     (lambda (scheme)
+       (let ((default-directory root))
+         (my-xcode--start-short-process
+          "Build Server"
+          (my-xcode--build-server-command container scheme)
+          (lambda (process)
+            (when (zerop (process-exit-status process))
+              (let ((file (expand-file-name "buildServer.json" root)))
+                (if (file-exists-p file)
+                    (message "Generated %s; reconnect Eglot to use it" file)
+                  (message "xcode-build-server did not create %s" file)))))))))))
+
 (defun my-xcode-run ()
   "Build, install and launch the selected app without a debugger."
   (interactive)
@@ -1153,6 +1180,7 @@ registered for a cached Dape restart."
   "r" #'my-xcode-run "i" #'my-xcode-info "q" #'my-xcode-stop
   "o" #'my-xcode-open-container "l" #'my-xcode-stream-logs
   "v" #'my-xcode-toggle-build-output
+  "g" #'my-xcode-generate-build-server
   "R" #'my-xcode-restart-dape "d" #'my-xcode-dape-debug
   "C-g" #'keyboard-quit)
 
@@ -1165,6 +1193,7 @@ registered for a cached Dape restart."
     "r" "build, install and run" "i" "show selection and product"
     "q" "stop debugger and app" "o" "open in Xcode"
     "l" "stream app logs" "v" "debug build output"
+    "g" "generate buildServer.json"
     "R" "restart Dape session" "d" "debug with Dape"))
 
 (provide 'my-xcode)
