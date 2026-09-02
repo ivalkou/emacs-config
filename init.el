@@ -379,6 +379,13 @@
   (("C-c t" . vterm)
    ("C-c T" . vterm-other-window)))
 
+;; Makefile targets через Vertico и стандартный compilation buffer.
+(use-package makefile-executor
+  :ensure t
+  :hook (makefile-mode . makefile-executor-mode)
+  :bind (:map project-prefix-map
+              ("m" . makefile-executor-execute-project-target)))
+
 ;; Diff-hl: цветовые полосы слева для изменений в git.
 (use-package diff-hl
   :ensure t
