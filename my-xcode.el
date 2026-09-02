@@ -9,6 +9,8 @@
 (require 'seq)
 (require 'subr-x)
 
+(declare-function eglot-current-server "eglot" ())
+(declare-function eglot-reconnect "eglot" (server &optional interactive))
 
 (defvar my-xcode-project-selections (make-hash-table :test #'equal)
   "Selected Xcode state, keyed by project root.")
@@ -613,14 +615,29 @@ Reuse the project cache unless REFRESH is non-nil."
   "Join COMMANDS into a fail-fast shell command."
   (mapconcat #'my-xcode--shell-command commands " && "))
 
+(defun my-xcode--result-bundle-path ()
+  "Return a unique nonexistent path for a temporary Xcode result bundle."
+  (let ((path (make-temp-file "emacs-xcode-" nil ".xcresult")))
+    (delete-file path)
+    path))
+
 (defun my-xcode--build-command (selection)
-  "Return the selected xcodebuild command as an argument list."
-  (append '("xcrun" "xcodebuild") (my-xcode--container-arguments)
-          (list "-scheme" (plist-get selection :scheme)
-                "-configuration" (plist-get selection :configuration)
-                "-destination" (my-xcode--destination-spec
-                                 (plist-get selection :destination))
-                "build")))
+  "Return an xcodebuild command for SELECTION that registers its build log."
+  (let* ((result-bundle (my-xcode--result-bundle-path))
+         (cleanup (my-xcode--shell-command
+                   (list "/bin/rm" "-rf" "--" result-bundle)))
+         (build
+          (my-xcode--shell-command
+           (append '("xcrun" "xcodebuild") (my-xcode--container-arguments)
+                   (list "-scheme" (plist-get selection :scheme)
+                         "-configuration" (plist-get selection :configuration)
+                         "-destination" (my-xcode--destination-spec
+                                          (plist-get selection :destination))
+                         "-resultBundlePath" result-bundle
+                         "build")))))
+    (list "/bin/sh" "-c"
+          (format "%s; %s; status=$?; %s; exit $status"
+                  cleanup build cleanup))))
 
 (defun my-xcode--install-command (destination product)
   "Return the Apple CLI install command for DESTINATION and PRODUCT."
@@ -904,10 +921,11 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
                                   (list (my-xcode--build-command selection))))))
 
 (defun my-xcode-generate-build-server ()
-  "Generate buildServer.json for the selected Xcode container and scheme."
+  "Generate buildServer.json and reconnect Eglot in the originating buffer."
   (interactive)
   (let ((root (my-xcode--project-root))
-        (container (my-xcode--container)))
+        (container (my-xcode--container))
+        (source-buffer (current-buffer)))
     (my-xcode--ensure-scheme
      (lambda (scheme)
        (let ((default-directory root))
@@ -917,9 +935,18 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
           (lambda (process)
             (when (zerop (process-exit-status process))
               (let ((file (expand-file-name "buildServer.json" root)))
-                (if (file-exists-p file)
-                    (message "Generated %s; reconnect Eglot to use it" file)
-                  (message "xcode-build-server did not create %s" file)))))))))))
+                (if (not (file-exists-p file))
+                    (message "xcode-build-server did not create %s" file)
+                  (let ((reconnected
+                         (when (and (buffer-live-p source-buffer)
+                                    (featurep 'eglot))
+                           (with-current-buffer source-buffer
+                             (when-let* ((server (eglot-current-server)))
+                               (eglot-reconnect server)
+                               t)))))
+                    (message
+                     "Generated %s%s; build with C-c x b if compiler flags are stale"
+                     file (if reconnected "; reconnected Eglot" "")))))))))))))
 
 (defun my-xcode-run ()
   "Build, install and launch the selected app without a debugger."
@@ -1068,11 +1095,13 @@ registered for a cached Dape restart."
                   (> (plist-get left :mtime) (plist-get right :mtime))))))
 
 (defun my-xcode--termination-spec (destination product)
-  "Return termination command and any consumed PID-file for the selected app."
+  "Return termination metadata for DESTINATION and PRODUCT."
   (if (eq (plist-get destination :kind) 'simulator)
       (list :command
             (list "xcrun" "simctl" "terminate"
-                  (plist-get destination :id) (plist-get product :bundle-id)))
+                  (plist-get destination :id) (plist-get product :bundle-id))
+            ;; POSIX status 3 is ESRCH: the requested app process is absent.
+            :success-statuses '(0 3))
     (let ((core-id (plist-get destination :core-device-id)))
       (unless core-id
         (user-error "Physical destination has no CoreDevice identifier"))
@@ -1087,6 +1116,29 @@ registered for a cached Dape restart."
                     "--device" core-id "--pid" (plist-get candidate :pid))
               :pid-file (plist-get candidate :file))))))
 
+(defun my-xcode--start-short-process
+    (label command &optional exit-callback success-statuses)
+  "Run COMMAND asynchronously, showing its buffer only when it fails.
+SUCCESS-STATUSES defaults to just zero.  Invoke EXIT-CALLBACK with the process."
+  (let ((buffer (generate-new-buffer (format "*Xcode %s*" label)))
+        (success-statuses (or success-statuses '(0))))
+    (make-process
+     :name (generate-new-buffer-name (format "xcode-%s" (downcase label)))
+     :buffer buffer :command command :noquery t :connection-type 'pipe
+     :sentinel
+     (lambda (process _event)
+       (when (memq (process-status process) '(exit signal))
+         (let ((success (and (eq (process-status process) 'exit)
+                             (memq (process-exit-status process)
+                                   success-statuses))))
+           (message "Xcode %s %s" label
+                    (if success "finished" "was not needed or failed"))
+           (when exit-callback
+             (funcall exit-callback process))
+           (if success
+               (when (buffer-live-p buffer) (kill-buffer buffer))
+             (when (buffer-live-p buffer) (display-buffer buffer)))))))))
+
 (defun my-xcode--terminate-command (destination product)
   "Return the documented termination command for DESTINATION and PRODUCT."
   (plist-get (my-xcode--termination-spec destination product) :command))
@@ -1095,21 +1147,6 @@ registered for a cached Dape restart."
   "Delete a successfully consumed PID-FILE while retaining its registration."
   (when (and pid-file (file-exists-p pid-file))
     (delete-file pid-file)))
-
-(defun my-xcode--start-short-process (label command &optional exit-callback)
-  "Run COMMAND asynchronously and invoke EXIT-CALLBACK with its process."
-  (let ((buffer (get-buffer-create (format "*Xcode %s*" label))))
-    (display-buffer buffer)
-    (make-process
-     :name (generate-new-buffer-name (format "xcode-%s" (downcase label)))
-     :buffer buffer :command command :noquery t :connection-type 'pipe
-     :sentinel (lambda (process _event)
-                 (when (memq (process-status process) '(exit signal))
-                   (message "Xcode %s %s" label
-                            (if (zerop (process-exit-status process))
-                                "finished" "was not needed or failed"))
-                   (when exit-callback
-                     (funcall exit-callback process)))))))
 
 (defun my-xcode-stop ()
   "Stop Dape immediately and terminate the app from cached session metadata."
@@ -1135,7 +1172,8 @@ registered for a cached Dape restart."
              "Stop" command
              (lambda (process)
                (when (zerop (process-exit-status process))
-                 (my-xcode--consume-device-pid-file pid-file))))
+                 (my-xcode--consume-device-pid-file pid-file)))
+             (plist-get termination :success-statuses))
           (message "Dape stopped; app termination unavailable"))))))
 
 (defun my-xcode-stream-logs ()

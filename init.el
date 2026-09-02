@@ -226,6 +226,21 @@
       (treemacs)
     (treemacs-add-and-display-current-project-exclusively)))
 
+(defun my-treemacs-buffer-setup ()
+  "Keep long paths on one line and enable horizontal mouse scrolling."
+  (setq-local truncate-lines t
+              word-wrap nil
+              mouse-wheel-tilt-scroll t
+              mouse-wheel-flip-direction t
+              mouse-wheel-scroll-amount-horizontal 3))
+
+(defun my-treemacs-mode-line-project-name ()
+  "Return the current Treemacs project name for the mode line."
+  (if-let* ((workspace (treemacs-current-workspace))
+            (project (car (treemacs-workspace->projects workspace))))
+      (format " Treemacs: %s" (treemacs-project->name project))
+    " Treemacs"))
+
 ;; Treemacs: дерево текущего проекта со слежением за активным буфером.
 (use-package treemacs
   :ensure t
@@ -233,6 +248,11 @@
   :bind (("C-c e" . my-treemacs-toggle-current-project))
   :custom
   (treemacs-follow-after-init t)
+  (treemacs-text-scale -1)
+  (treemacs-width 45)
+  (treemacs-user-mode-line-format
+   '(:eval (my-treemacs-mode-line-project-name)))
+  :hook (treemacs-mode . my-treemacs-buffer-setup)
   :config
   (treemacs-follow-mode 1))
 
@@ -379,13 +399,68 @@
   (("C-c t" . vterm)
    ("C-c T" . vterm-other-window)))
 
+;; Цветной вывод Make и других команд в `compilation-mode'.
+;; PTY сообщает инструментам терминал с поддержкой цветов, а фильтр
+;; преобразует ANSI SGR-последовательности в faces Emacs.
+(use-package compile
+  :ensure nil
+  :custom
+  (compilation-environment '("TERM=xterm-256color"))
+  :config
+  (require 'ansi-color)
+  (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter))
+
+(defun my-makefile--target-comments (filename)
+  "Return Make target comments from FILENAME as a hash table."
+  (let ((comments (make-hash-table :test #'equal)))
+    (when (file-readable-p filename)
+      (with-temp-buffer
+        (insert-file-contents filename)
+        (goto-char (point-min))
+        (while (re-search-forward
+                "^\\([[:alnum:]_.-]+\\):.*##[ \\t]+\\(.+\\)$" nil t)
+          (puthash (match-string-no-properties 1)
+                   (string-trim (match-string-no-properties 2))
+                   comments))))
+    comments))
+
+(defun my-makefile--select-target-with-comments (original &optional filename)
+  "Call ORIGINAL selector and annotate targets with comments from FILENAME."
+  (let* ((filename (or filename (buffer-file-name)))
+         (comments (my-makefile--target-comments filename))
+         (completion-extra-properties
+          (plist-put
+           (copy-sequence completion-extra-properties)
+           :affixation-function
+           (lambda (candidates)
+             (let ((width (apply #'max 0 (mapcar #'string-width candidates))))
+               (mapcar
+                (lambda (candidate)
+                  (let ((comment (gethash candidate comments)))
+                    (list candidate ""
+                          (if comment
+                              (concat
+                               (make-string
+                                (+ 2 (- width (string-width candidate))) ?\s)
+                               (propertize comment
+                                           'face 'completions-annotations))
+                            ""))))
+                candidates))))))
+    (funcall original filename)))
+
 ;; Makefile targets через Vertico из любого буфера текущего проекта.
 (use-package makefile-executor
   :ensure t
+  :functions (makefile-executor-select-target)
   :hook (makefile-mode . makefile-executor-mode)
   :bind (("C-c C-e" . makefile-executor-execute-project-target)
          :map project-prefix-map
-         ("m" . makefile-executor-execute-project-target)))
+         ("m" . makefile-executor-execute-project-target))
+  :config
+  (advice-remove 'makefile-executor-select-target
+                 #'my-makefile--select-target-with-comments)
+  (advice-add 'makefile-executor-select-target :around
+              #'my-makefile--select-target-with-comments))
 
 ;; Diff-hl: цветовые полосы слева для изменений в git.
 (use-package diff-hl
