@@ -230,6 +230,7 @@
   "Keep long paths on one line and enable horizontal mouse scrolling."
   (setq-local truncate-lines t
               word-wrap nil
+              auto-hscroll-mode nil
               mouse-wheel-tilt-scroll t
               mouse-wheel-flip-direction t
               mouse-wheel-scroll-amount-horizontal 3))
