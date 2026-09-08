@@ -400,9 +400,18 @@
   (("C-c t" . vterm)
    ("C-c T" . vterm-other-window)))
 
+(defun my-agent-shell-data-subdir (subdir)
+  "Return SUBDIR under Emacs config, partitioned by project."
+  (let* ((cwd (directory-file-name (agent-shell-cwd)))
+         (project (replace-regexp-in-string
+                   "/" "-" (string-remove-prefix "/" cwd))))
+    (locate-user-emacs-file
+     (file-name-concat "agent-shell" project subdir))))
+
 ;; Agent Shell: нативный Emacs-интерфейс к Oh My Pi через корпоративный proxy-скрипт.
 (use-package agent-shell
   :ensure t
+  :functions agent-shell-cwd
   :commands agent-shell
   :bind ("C-c a" . agent-shell)
   :custom
@@ -411,6 +420,7 @@
    '((display-buffer-in-side-window)
      (side . right)
      (window-width . 0.4)))
+  (agent-shell-dot-subdir-function #'my-agent-shell-data-subdir)
   (agent-shell-omp-acp-command
    (list (expand-file-name "~/omp-proxy.sh") "acp"))
   :hook (agent-shell-mode . (lambda () (display-line-numbers-mode -1))))
