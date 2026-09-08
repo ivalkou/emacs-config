@@ -400,6 +400,21 @@
   (("C-c t" . vterm)
    ("C-c T" . vterm-other-window)))
 
+;; Agent Shell: нативный Emacs-интерфейс к Oh My Pi через корпоративный proxy-скрипт.
+(use-package agent-shell
+  :ensure t
+  :commands agent-shell
+  :bind ("C-c a" . agent-shell)
+  :custom
+  (agent-shell-preferred-agent-config 'omp)
+  (agent-shell-display-action
+   '((display-buffer-in-side-window)
+     (side . right)
+     (window-width . 0.4)))
+  (agent-shell-omp-acp-command
+   (list (expand-file-name "~/omp-proxy.sh") "acp"))
+  :hook (agent-shell-mode . (lambda () (display-line-numbers-mode -1))))
+
 ;; Цветной вывод Make и других команд в `compilation-mode'.
 ;; PTY сообщает инструментам терминал с поддержкой цветов, а фильтр
 ;; преобразует ANSI SGR-последовательности в faces Emacs.
