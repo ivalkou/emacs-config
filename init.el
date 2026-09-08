@@ -7,6 +7,11 @@
 (setq custom-file (locate-user-emacs-file "custom.el"))
 (load custom-file t)
 
+;; Хранить резервные копии отдельно от редактируемых файлов.
+(let ((directory (locate-user-emacs-file "backups/")))
+  (make-directory directory t)
+  (setopt backup-directory-alist `(("." . ,directory))))
+
 ;; Не открывать окно предупреждений native-compiler, но сохранять их в журнале.
 (with-eval-after-load 'comp-run
   (customize-set-variable 'native-comp-async-report-warnings-errors 'silent))
@@ -31,6 +36,14 @@
   :config
   (exec-path-from-shell-initialize))
 
+;; Использовать привычные границы предложений и равномерно делить окна.
+(setopt sentence-end-double-space nil
+        window-combination-resize t)
+
+;; Не выполнять сетевые проверки для строк, похожих на имена хостов.
+(with-eval-after-load 'ffap
+  (setopt ffap-machine-p-known 'reject))
+
 ;;; Интерфейс
 
 ;; Показывать номера строк во всех буферах.
@@ -38,6 +51,7 @@
 
 ;; Подсвечивать текущую строку курсора.
 (global-hl-line-mode t)
+(setopt global-hl-line-sticky-flag 'window)
 
 ;; Курсор в виде вертикальной линии.
 (setq-default cursor-type 'bar)
@@ -49,6 +63,10 @@
   :ensure t
   :config
   (telephone-line-mode 1))
+
+;; Сразу показывать парную скобку и контекст за границей окна.
+(setopt show-paren-delay 0
+        show-paren-context-when-offscreen 'overlay)
 
 ;; Тема Catppuccin (вариант mocha используется по умолчанию).
 (use-package catppuccin-theme
@@ -106,6 +124,13 @@
 ;; Копировать выделенный текст при перетаскивании мышью.
 (setq mouse-drag-copy-region t)
 
+;; Точная прокрутка трекпадом и безопасная активация окна на macOS.
+(pixel-scroll-precision-mode 1)
+(when (display-graphic-p)
+  (context-menu-mode 1))
+(when (eq system-type 'darwin)
+  (setopt ns-click-through nil))
+
 ;; Короткие подтверждения y/n вместо yes/no.
 ;; Перед удалением сохранять внешний clipboard в kill ring и не добавлять
 ;; туда повторяющиеся записи.
@@ -115,12 +140,21 @@
 
 ;;; Дополнение и поиск
 
+(setopt tab-always-indent 'complete)
+
 ;; Vertico: вертикальный интерфейс дополнения в минибуфере.
 ;; Показывает варианты дополнения в виде вертикального списка.
 (use-package vertico
   :ensure t
   :config
   (vertico-mode 1))
+
+;; Удалять M-DEL целый компонент пути в Vertico.
+(use-package vertico-directory
+  :ensure nil
+  :after vertico
+  :bind (:map vertico-map
+              ("M-DEL" . vertico-directory-delete-word)))
 
 ;; Orderless: поиск по частям слов при дополнении.
 ;; Позволяет искать "fi em" и находить "find-file-emacs".
@@ -142,6 +176,13 @@
   :ensure nil
   :config
   (savehist-mode 1))
+
+;; Счётчик совпадений, свободная прокрутка и циклический Isearch.
+(setopt isearch-lazy-count t
+        isearch-allow-motion t
+        isearch-allow-scroll t
+        isearch-repeat-on-direction-change t
+        isearch-wrap-pause 'no-ding)
 
 ;; Сохранять список недавно открытых файлов и позицию курсора в них.
 ;; Оба режима встроены в Emacs и не требуют дополнительных пакетов.
@@ -193,7 +234,8 @@
   :custom
   (cape-dabbr-check-other-buffers nil)
   :config
-  (add-hook 'completion-at-point-functions #'cape-dabbrev 90))
+  (add-hook 'completion-at-point-functions #'cape-dabbrev 90)
+  (add-hook 'completion-at-point-functions #'cape-file 90))
 
 ;; Reverse-im: горячие клавиши работают в любой раскладке.
 ;; Например, при русской раскладке C-s остаётся C-s, а не C-ы.
@@ -265,6 +307,9 @@
   (treemacs-nerd-icons-config))
 
 ;;; Тексты и заметки
+
+;; Выравнивать продолжения строк под списками и цитатами.
+(add-hook 'text-mode-hook #'visual-wrap-prefix-mode)
 
 ;; Org mode: настройка органайзера.
 (use-package org
@@ -604,8 +649,14 @@
   :config
   (repeat-mode 1))
 
-;; Автоматическое обновление буферов из файлов
-(global-auto-revert-mode 1)
+;; Автоматически обновлять файлы через системные уведомления и Git-состояние.
+(use-package autorevert
+  :ensure nil
+  :custom
+  (auto-revert-avoid-polling t)
+  (auto-revert-check-vc-info t)
+  :config
+  (global-auto-revert-mode 1))
 
 ;; Перемещение текста M-<up>, M-<down>
 (use-package move-text
