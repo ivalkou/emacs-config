@@ -2,12 +2,36 @@
 ;; Lexical binding ограничивает локальные переменные их областью видимости
 ;; и позволяет замыканиям безопасно сохранять значения.
 
+;;; Основа и платформа
+
 (setq custom-file (locate-user-emacs-file "custom.el"))
 (load custom-file t)
 
 ;; Не открывать окно предупреждений native-compiler, но сохранять их в журнале.
 (with-eval-after-load 'comp-run
   (customize-set-variable 'native-comp-async-report-warnings-errors 'silent))
+
+;; Настройка клавиш Command и Option на macOS.
+;; Command работает как Meta (M-), Option остаётся для ввода спецсимволов.
+(setq mac-command-modifier 'meta)
+(setq mac-option-modifier 'none)
+(global-unset-key (kbd "C-z"))
+
+;; Добавление репозитория MELPA к стандартным архивам пакетов.
+(require 'package)
+(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
+
+;; exec-path-from-shell: переносит PATH и другие переменные из shell в Emacs.
+;; Запускать его только для GUI и daemon на macOS: терминальный Emacs уже
+;; наследует окружение от родительского shell.
+(use-package exec-path-from-shell
+  :ensure t
+  :if (and (eq system-type 'darwin)
+           (or (display-graphic-p) (daemonp)))
+  :config
+  (exec-path-from-shell-initialize))
+
+;;; Интерфейс
 
 ;; Показывать номера строк во всех буферах.
 (global-display-line-numbers-mode t)
@@ -20,31 +44,11 @@
 
 (set-face-attribute 'default nil :family "Hack Nerd Font Mono" :height 150)
 
-;; Настройка клавиш Command и Option на macOS.
-;; Command работает как Meta (M-), Option остаётся для ввода спецсимволов.
-(setq mac-command-modifier 'meta)
-(setq mac-option-modifier 'none)
-(global-unset-key (kbd "C-z"))
-
-;; Добавление репозитория MELPA к стандартным архивам пакетов.
-(require 'package)
-(add-to-list 'package-archives '("melpa" . "https://melpa.org/packages/") t)
-
 ;; Telephone-line: красивая строка статуса со стрелками.
 (use-package telephone-line
   :ensure t
   :config
   (telephone-line-mode 1))
-
-;; exec-path-from-shell: переносит PATH и другие переменные из shell в Emacs.
-;; Запускать его только для GUI и daemon на macOS: терминальный Emacs уже
-;; наследует окружение от родительского shell.
-(use-package exec-path-from-shell
-  :ensure t
-  :if (and (eq system-type 'darwin)
-           (or (display-graphic-p) (daemonp)))
-  :config
-  (exec-path-from-shell-initialize))
 
 ;; Тема Catppuccin (вариант mocha используется по умолчанию).
 (use-package catppuccin-theme
@@ -65,28 +69,6 @@
                       :background "#6c7086"
                       :foreground "#a6e3a1"
                       :weight 'bold))
-
-;; Org mode: настройка органайзера.
-(use-package org
-  :ensure nil
-  :defer t
-  :init
-  (setq org-directory "~/org/"
-        org-agenda-files (list org-directory)
-        org-default-notes-file (concat org-directory "tasks.org")
-        calendar-week-start-day 1)
-  :config
-  (set-face-attribute 'org-level-1 nil :height 1.5)
-  (set-face-attribute 'org-level-2 nil :height 1.2))
-
-;; Встроенный в Emacs 31 tree-sitter режим Markdown. При первом открытии
-;; сам регистрирует и устанавливает grammars markdown и markdown-inline.
-(use-package markdown-ts-mode
-  :ensure nil
-  :mode
-  (("\\.md\\'" . markdown-ts-mode-maybe)
-   ("README\\.md\\'" . markdown-ts-mode-maybe))
-  :hook (markdown-ts-mode . visual-line-mode))
 
 ;; Nerd Icons: пиктограммы из уже используемого Nerd Font.
 (use-package nerd-icons
@@ -131,6 +113,8 @@
       save-interprogram-paste-before-kill t
       kill-do-not-save-duplicates t)
 
+;;; Дополнение и поиск
+
 ;; Vertico: вертикальный интерфейс дополнения в минибуфере.
 ;; Показывает варианты дополнения в виде вертикального списка.
 (use-package vertico
@@ -152,11 +136,6 @@
   :ensure t
   :config
   (marginalia-mode 1))
-
-;; Rainbow-delimiters: раскрашивает вложенные скобки в разные цвета.
-(use-package rainbow-delimiters
-  :ensure t
-  :hook (prog-mode . rainbow-delimiters-mode))
 
 ;; Savehist: сохраняет историю минибуфера между сессиями.
 (use-package savehist
@@ -197,6 +176,25 @@
   :ensure t
   :after (embark consult))
 
+;; Автодополнение кода
+(use-package corfu
+  :ensure t
+  :custom
+  (corfu-auto t)
+  (corfu-auto-prefix 2)
+  (corfu-cycle t)
+  :config
+  (global-corfu-mode 1)
+  (corfu-popupinfo-mode 1))
+
+;; Автодополнение из слов буфера
+(use-package cape
+  :ensure t
+  :custom
+  (cape-dabbr-check-other-buffers nil)
+  :config
+  (add-hook 'completion-at-point-functions #'cape-dabbrev 90))
+
 ;; Reverse-im: горячие клавиши работают в любой раскладке.
 ;; Например, при русской раскладке C-s остаётся C-s, а не C-ы.
 (use-package reverse-im
@@ -212,6 +210,8 @@
   :ensure nil
   :config
   (which-key-mode 1))
+
+;;; Проекты и навигация
 
 ;; Magit: интерфейс для Git в Emacs.
 (use-package magit
@@ -263,6 +263,54 @@
   :after treemacs
   :config
   (treemacs-nerd-icons-config))
+
+;;; Тексты и заметки
+
+;; Org mode: настройка органайзера.
+(use-package org
+  :ensure nil
+  :defer t
+  :init
+  (setq org-directory "~/org/"
+        org-agenda-files (list org-directory)
+        org-default-notes-file (concat org-directory "tasks.org")
+        calendar-week-start-day 1)
+  :config
+  (set-face-attribute 'org-level-1 nil :height 1.5)
+  (set-face-attribute 'org-level-2 nil :height 1.2))
+
+;; Встроенный в Emacs 31 tree-sitter режим Markdown. При первом открытии
+;; сам регистрирует и устанавливает grammars markdown и markdown-inline.
+(use-package markdown-ts-mode
+  :ensure nil
+  :mode
+  (("\\.md\\'" . markdown-ts-mode-maybe)
+   ("README\\.md\\'" . markdown-ts-mode-maybe))
+  :hook (markdown-ts-mode . visual-line-mode))
+
+;; Denote - заметки
+(use-package denote
+  :ensure t
+  :init
+  (setq denote-directory (expand-file-name "~/org/notes/"))
+  ;; Включить режим при запуске, чтобы его find-file-hook уже существовал,
+  ;; когда Denote-файл открывают напрямую, а не через команду Denote.
+  (denote-rename-buffer-mode 1)
+  :hook (dired-mode . denote-dired-mode)
+  :bind
+  (("C-c n n" . denote)
+   ("C-c n r" . denote-rename-file)
+   ("C-c n l" . denote-link)
+   ("C-c n b" . denote-backlinks)
+   ("C-c n d" . denote-dired)
+   ("C-c n g" . denote-grep)))
+
+;;; Программирование
+
+;; Rainbow-delimiters: раскрашивает вложенные скобки в разные цвета.
+(use-package rainbow-delimiters
+  :ensure t
+  :hook (prog-mode . rainbow-delimiters-mode))
 
 ;; Tree-sitter в Emacs 31 автоматически устанавливает grammars, которые
 ;; регистрируют встроенные ts-modes, и включает их вместо обычных modes.
@@ -377,6 +425,24 @@
   :after (embark consult-eglot)
   :config
   (consult-eglot-embark-mode 1))
+
+;; Homebrew устанавливает LLVM как keg-only, поэтому его /bin не попадает
+;; в PATH автоматически. На этом Mac Homebrew расположен в /opt/homebrew.
+(let* ((llvm-bin "/opt/homebrew/opt/llvm/bin")
+       (path (or (getenv "PATH") ""))
+       (path-dirs (split-string path path-separator t)))
+  (add-to-list 'exec-path llvm-bin)
+  (unless (member llvm-bin path-dirs)
+    (setenv "PATH"
+            (concat llvm-bin path-separator path))))
+
+;; Xcode build, run and debug commands for Swift projects.
+(load (expand-file-name "my-xcode.el" user-emacs-directory) nil nil t)
+
+;; Dape debugger configuration and controls.
+(load (expand-file-name "my-dape.el" user-emacs-directory) nil nil t)
+
+;;; Инструменты разработки
 
 ;; Vterm: быстрый терминал внутри Emacs на основе libvterm.
 ;; Требует cmake и libtool. На macOS: brew install cmake libtool.
@@ -504,6 +570,8 @@
     (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
   (add-hook 'diff-hl-mode-hook #'diff-hl-flydiff-mode))
 
+;;; Редактирование и клавиши
+
 ;; Глобальные горячие клавиши.
 (use-package emacs
   :ensure nil
@@ -529,41 +597,6 @@
   :config
   (delete-selection-mode 1))
 
-;; Автодополнение кода
-(use-package corfu
-  :ensure t
-  :custom
-  (corfu-auto t)
-  (corfu-auto-prefix 2)
-  (corfu-cycle t)
-  :config
-  (global-corfu-mode 1)
-  (corfu-popupinfo-mode 1))
-
-;; Автодополнение из слов буфера
-(use-package cape
-  :ensure t
-  :custom
-  (cape-dabbr-check-other-buffers nil)
-  :config
-  (add-hook 'completion-at-point-functions #'cape-dabbrev 90))
-
-;; Homebrew устанавливает LLVM как keg-only, поэтому его /bin не попадает
-;; в PATH автоматически. На этом Mac Homebrew расположен в /opt/homebrew.
-(let* ((llvm-bin "/opt/homebrew/opt/llvm/bin")
-       (path (or (getenv "PATH") ""))
-       (path-dirs (split-string path path-separator t)))
-  (add-to-list 'exec-path llvm-bin)
-  (unless (member llvm-bin path-dirs)
-    (setenv "PATH"
-            (concat llvm-bin path-separator path))))
-
-;; Xcode build, run and debug commands for Swift projects.
-(load (expand-file-name "my-xcode.el" user-emacs-directory) nil nil t)
-
-;; Dape debugger configuration and controls.
-(load (expand-file-name "my-dape.el" user-emacs-directory) nil nil t)
-
 ;; repeat-mode позволяет несколько раз подряд вызывать команды,
 ;; относящиеся к одной группе, одиночными клавишами.
 ;; В частности, это удобно в отладке: next / step / continue и т. п.
@@ -574,29 +607,11 @@
 ;; Автоматическое обновление буферов из файлов
 (global-auto-revert-mode 1)
 
-
 ;; Перемещение текста M-<up>, M-<down>
 (use-package move-text
   :ensure t
   :config
   (move-text-default-bindings))
-
-;; Denote - заметки
-(use-package denote
-  :ensure t
-  :init
-  (setq denote-directory (expand-file-name "~/org/notes/"))
-  ;; Включить режим при запуске, чтобы его find-file-hook уже существовал,
-  ;; когда Denote-файл открывают напрямую, а не через команду Denote.
-  (denote-rename-buffer-mode 1)
-  :hook (dired-mode . denote-dired-mode)
-  :bind
-  (("C-c n n" . denote)
-   ("C-c n r" . denote-rename-file)
-   ("C-c n l" . denote-link)
-   ("C-c n b" . denote-backlinks)
-   ("C-c n d" . denote-dired)
-   ("C-c n g" . denote-grep)))
 
 ;; Визуальное перемещение курсора
 (use-package avy
@@ -642,3 +657,5 @@
 
 ;; Автозакрытие скобок
 (electric-pair-mode 1)
+
+;;; init.el ends here
