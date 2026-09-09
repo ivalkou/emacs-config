@@ -272,7 +272,9 @@
 ;; Magit: интерфейс для Git в Emacs.
 (use-package magit
   :ensure t
-  :commands magit-status)
+  :commands magit-status
+  :config
+  (add-hook 'magit-status-sections-hook #'magit-insert-worktrees t))
 
 (defun my-treemacs-toggle-current-project ()
   "Toggle Treemacs for the project containing the current buffer."
