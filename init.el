@@ -255,7 +255,10 @@
   :demand t
   :custom
   (reverse-im-input-methods '("russian-computer"))
+  (reverse-im-read-char-advice-function #'reverse-im-read-char-include)
   :config
+  (add-to-list 'reverse-im-read-char-include-commands
+               "\\`meow-.*-of-thing\\'")
   (reverse-im-mode 1))
 
 ;; Which-key: показывает подсказки по доступным клавишам.
@@ -732,12 +735,25 @@
                         'term-mode 'eshell-mode 'dape-repl-mode)
     (meow-mode -1)))
 
+(defun my-meow-beacon-use-translated-entry-key (&rest _)
+  "Store the logical key so Beacon replay works through `reverse-im'."
+  (let ((keys (this-command-keys-vector)))
+    (unless (seq-empty-p keys)
+      (setq-local meow--beacon-insert-enter-key
+                  (aref keys (1- (length keys)))))))
+
 ;; Meow: modal code editing over the existing Emacs keymaps.
 (use-package meow
   :ensure t
   :demand t
   :config
   (my-meow-setup)
+  ;; `last-input-event' retains the raw Russian character after reverse-im,
+  ;; but Beacon must replay the translated Meow command key.
+  (dolist (command '(meow-beacon-insert meow-beacon-append
+                     meow-beacon-change meow-beacon-change-save
+                     meow-beacon-change-char))
+    (advice-add command :after #'my-meow-beacon-use-translated-entry-key))
   (dolist (state-color '((normal . blue)
                          (insert . green)
                          (motion . mauve)
