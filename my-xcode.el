@@ -621,8 +621,8 @@ Reuse the project cache unless REFRESH is non-nil."
     (delete-file path)
     path))
 
-(defun my-xcode--build-command (selection)
-  "Return an xcodebuild command for SELECTION that registers its build log."
+(defun my-xcode--build-command (selection &optional clean)
+  "Return an xcodebuild command for SELECTION, optionally CLEANing first."
   (let* ((result-bundle (my-xcode--result-bundle-path))
          (cleanup (my-xcode--shell-command
                    (list "/bin/rm" "-rf" "--" result-bundle)))
@@ -633,8 +633,9 @@ Reuse the project cache unless REFRESH is non-nil."
                          "-configuration" (plist-get selection :configuration)
                          "-destination" (my-xcode--destination-spec
                                           (plist-get selection :destination))
-                         "-resultBundlePath" result-bundle
-                         "build")))))
+                         "-resultBundlePath" result-bundle)
+                   (when clean '("clean"))
+                   '("build")))))
     (list "/bin/sh" "-c"
           (format "%s; %s; status=$?; %s; exit $status"
                   cleanup build cleanup))))
@@ -920,6 +921,14 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
      (my-xcode--start-compilation "Build"
                                   (list (my-xcode--build-command selection))))))
 
+(defun my-xcode-clean-build ()
+  "Clean and build the selected scheme, destination and configuration asynchronously."
+  (interactive)
+  (my-xcode--with-selection
+   (lambda (selection)
+     (my-xcode--start-compilation
+      "Clean Build" (list (my-xcode--build-command selection t))))))
+
 (defun my-xcode-generate-build-server ()
   "Generate buildServer.json and reconnect Eglot in the originating buffer."
   (interactive)
@@ -945,7 +954,7 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
                                (eglot-reconnect server)
                                t)))))
                     (message
-                     "Generated %s%s; build with C-c x b if compiler flags are stale"
+                     "Generated %s%s; clean build with C-c x B if compiler flags are stale"
                      file (if reconnected "; reconnected Eglot" "")))))))))))))
 
 (defun my-xcode-run ()
@@ -1215,23 +1224,27 @@ SUCCESS-STATUSES defaults to just zero.  Invoke EXIT-CALLBACK with the process."
   :doc "Project Xcode build, run and debug commands."
   "t" #'my-xcode-select-destination "s" #'my-xcode-select-scheme
   "c" #'my-xcode-select-configuration "b" #'my-xcode-build
+  "B" #'my-xcode-clean-build
   "r" #'my-xcode-run "i" #'my-xcode-info "q" #'my-xcode-stop
   "o" #'my-xcode-open-container "l" #'my-xcode-stream-logs
   "v" #'my-xcode-toggle-build-output
-  "g" #'my-xcode-generate-build-server
+  "j" #'my-xcode-generate-build-server
   "R" #'my-xcode-restart-dape "d" #'my-xcode-dape-debug
   "C-g" #'keyboard-quit)
 
 (keymap-set global-map "C-c x" my-xcode-prefix-map)
 
 (with-eval-after-load 'which-key
+  ;; Meow Keypad показывает копию `C-c', поэтому имя нужно назначить её карте.
+  (which-key-add-keymap-based-replacements mode-specific-map "x" "Xcode")
   (which-key-add-keymap-based-replacements
     my-xcode-prefix-map
-    "t" "target device" "s" "scheme" "c" "configuration" "b" "build"
+    "t" "target device" "s" "scheme" "c" "configuration"
+    "b" "build" "B" "clean build"
     "r" "build, install and run" "i" "show selection and product"
     "q" "stop debugger and app" "o" "open in Xcode"
     "l" "stream app logs" "v" "debug build output"
-    "g" "generate buildServer.json"
+    "j" "generate buildServer.json"
     "R" "restart Dape session" "d" "debug with Dape"))
 
 (provide 'my-xcode)

@@ -7,10 +7,12 @@
 (setq custom-file (locate-user-emacs-file "custom.el"))
 (load custom-file t)
 
-;; Хранить резервные копии отдельно от редактируемых файлов.
+;; Не оставлять backup, auto-save и lock-файлы в репозиториях.
 (let ((directory (locate-user-emacs-file "backups/")))
   (make-directory directory t)
-  (setopt backup-directory-alist `(("." . ,directory))))
+  (setopt backup-directory-alist `(("." . ,directory))
+          auto-save-file-name-transforms `((".*" ,directory sha256))
+          lock-file-name-transforms `((".*" ,directory sha256))))
 
 ;; Не открывать окно предупреждений native-compiler, но сохранять их в журнале.
 (with-eval-after-load 'comp-run
@@ -417,6 +419,9 @@
   (setq eglot-sync-connect 0
         eglot-extend-to-xref t)
   :config
+  ;; Ветка уже показана VC-сегментом Telephone Line; не повторять имя проекта.
+  (setq eglot-mode-line-format
+        (delq 'eglot-mode-line-session eglot-mode-line-format))
   ;; Eglot implements recursive watches as one kqueue descriptor per directory.
   ;; This repository exceeds the macOS GUI process descriptor limit, while
   ;; SourceKit-LSP still receives open-buffer changes through standard LSP sync.
@@ -760,6 +765,10 @@
   :demand t
   :config
   (my-meow-setup)
+  ;; Which-key уже включён к моменту загрузки Meow, поэтому его hook не
+  ;; срабатывает повторно и Keypad иначе показывает размеченные команды как prefix.
+  (when (bound-and-true-p which-key-mode)
+    (meow--which-key-describe-keymap))
   ;; `last-input-event' retains the raw Russian character after reverse-im,
   ;; but Beacon must replay the translated Meow command key.
   (dolist (command '(meow-beacon-insert meow-beacon-append
