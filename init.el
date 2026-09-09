@@ -383,36 +383,18 @@
         treesit-enabled-modes t
         treesit-font-lock-level 4)
 
-;; swift-mode 10 пока не регистрирует grammar сам, поэтому для Swift остаётся
-;; единственный внешний recipe.
-(add-to-list 'treesit-language-source-alist
-             '(swift "https://github.com/alex-pinkus/tree-sitter-swift"
-                     :revision "0.7.3-with-generated-files"
-                     :copy-queries t))
-
-(defun my-swift-treesit-setup ()
-  "Установить и подключить Swift tree-sitter parser к текущему буферу."
-  (when (treesit-ensure-installed 'swift)
-    (treesit-parser-create 'swift)))
-
-;; swift-mode отвечает за редактирование и подсветку, а подключённый parser
-;; даёт структурное дерево для treesit-команд и расширений.
-(use-package swift-mode
-  :ensure t
-  :mode "\\.swift\\'"
-  :hook (swift-mode . my-swift-treesit-setup))
-
 ;; Увеличенный блок чтения ускоряет обмен крупными ответами с rust-analyzer.
 ;; Цена — до 4 МиБ памяти на одну операцию чтения процесса.
 (setq read-process-output-max (* 4 1024 1024))
 
+;; Swift mode, tree-sitter and SourceKit-LSP integration.
+(load (expand-file-name "my-swift.el" user-emacs-directory) nil nil t)
+
 ;; Eglot: встроенный LSP-клиент (с Emacs 29).
-;; Автоматически подключает rust-analyzer и SourceKit-LSP.
+;; Автоматически подключает rust-analyzer.
 (use-package eglot
   :ensure nil
-  :hook
-  ((rust-ts-mode . eglot-ensure)
-   (swift-mode . eglot-ensure))
+  :hook (rust-ts-mode . eglot-ensure)
   :init
   ;; Подключать LSP асинхронно, не блокируя интерфейс до трёх секунд.
   ;; Разрешить Xref продолжать навигацию во внешних файлах проекта.
@@ -422,69 +404,14 @@
   ;; Ветка уже показана VC-сегментом Telephone Line; не повторять имя проекта.
   (setq eglot-mode-line-format
         (delq 'eglot-mode-line-session eglot-mode-line-format))
-  ;; Eglot implements recursive watches as one kqueue descriptor per directory.
-  ;; This repository exceeds the macOS GUI process descriptor limit, while
-  ;; SourceKit-LSP still receives open-buffer changes through standard LSP sync.
-  (cl-defmethod eglot-client-capabilities :around ((server eglot-lsp-server))
-    (let ((capabilities (cl-call-next-method)))
-      (when (assq 'swift-mode (eglot--languages server))
-        (plist-put (plist-get capabilities :workspace)
-                   :didChangeWatchedFiles
-                   '(:dynamicRegistration :json-false
-                     :relativePatternSupport t)))
-      capabilities))
-  ;; xcrun выбирает SourceKit-LSP из активного Xcode/DEVELOPER_DIR.
-  (add-to-list 'eglot-server-programs
-               '((swift-mode :language-id "swift")
-                 . ("xcrun" "sourcekit-lsp")))
   ;; Автоматически выключать сервер при закрытии последнего управляемого буфера.
   (setq eglot-autoshutdown t))
-
-(defun my-consult-eglot--generated-swift-symbol-p (symbol-info)
-  "Return non-nil when SYMBOL-INFO names a Swift mangled symbol."
-  (when-let* ((name (plist-get symbol-info :name)))
-    (string-match-p "\\`_?\\$s" name)))
-
-(defun my-consult-eglot--filter-generated-symbols (original servers)
-  "Remove generated Swift symbols from ORIGINAL source using SERVERS."
-  (let ((source (funcall original servers)))
-    (lambda (sink)
-      (let ((handler (funcall source sink)))
-        (lambda (action)
-          (if (stringp action)
-              (let ((request (symbol-function 'jsonrpc-async-request)))
-                (cl-letf (((symbol-function 'jsonrpc-async-request)
-                           (lambda (connection method params &rest arguments)
-                             (when (and (eq method :workspace/symbol)
-                                        (assq 'swift-mode
-                                              (eglot--languages connection)))
-                               (when-let* ((success
-                                            (plist-get arguments :success-fn)))
-                                 (setq arguments
-                                       (plist-put
-                                        arguments :success-fn
-                                        (lambda (response)
-                                          (funcall
-                                           success
-                                           (seq-remove
-                                            #'my-consult-eglot--generated-swift-symbol-p
-                                            response)))))))
-                             (apply request connection method params arguments))))
-                  (funcall handler action)))
-            (funcall handler action)))))))
 
 ;; Поиск символов во всём Eglot workspace через Consult.
 (use-package consult-eglot
   :ensure t
   :after (consult eglot)
-  :bind ("M-g s" . consult-eglot-symbols)
-  :config
-  ;; SourceKit-LSP can expose Swift ABI names such as `$s4App...'.  They are
-  ;; compiler artifacts rather than source declarations and obstruct search.
-  (advice-remove 'consult-eglot--make-async-source
-                 #'my-consult-eglot--filter-generated-symbols)
-  (advice-add 'consult-eglot--make-async-source :around
-              #'my-consult-eglot--filter-generated-symbols))
+  :bind ("M-g s" . consult-eglot-symbols))
 
 ;; Embark actions и export результатов `consult-eglot-symbols' в grep-буфер.
 (use-package consult-eglot-embark
