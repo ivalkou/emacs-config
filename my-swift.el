@@ -25,104 +25,137 @@
          (swift-mode . eglot-ensure)))
 
 ;; SourceKit-LSP 6.3 не открывает interfaces сторонних модулей, если их нет
-;; в index store. Сначала открываем interface модуля через import, затем
-;; находим точное объявление по USR.
+;; в index store. Используем его reference-document API и сверяем объявления
+;; по точному USR в корректном build context.
 (defun my-eglot-swift--lsp-items (response)
   "Return RESPONSE as a list of LSP items."
   (if (vectorp response) response (and response (list response))))
 
+(defvar-local my-eglot-swift--reference-uri nil)
+(defvar-local my-eglot-swift--reference-server nil)
+
 (defun my-eglot-swift--module-interface (server module)
-  "Return SERVER's existing or generated interface location for MODULE."
-  (or (seq-some
+  "Return SERVER's generated interface location for MODULE."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           (format "\\_<import[[:space:]]+\\(%s\\)\\_>"
+                   (regexp-quote module))
+           nil t)
+      (goto-char (match-beginning 1))
+      (seq-first
+       (my-eglot-swift--lsp-items
+        (eglot--request server :textDocument/definition
+                        (eglot--TextDocumentPositionParams)))))))
+
+(defun my-eglot-swift--reference-buffer (server uri)
+  "Return a read-only buffer for SERVER's reference document URI."
+  (or (seq-find
        (lambda (buffer)
          (with-current-buffer buffer
-           (and buffer-file-name
-                (string= (file-name-nondirectory buffer-file-name)
-                         (concat module ".swiftinterface"))
-                (eq server (eglot-current-server))
-                `(:uri ,(eglot-path-to-uri buffer-file-name)))))
+           (and (eq my-eglot-swift--reference-server server)
+                (equal my-eglot-swift--reference-uri uri))))
        (buffer-list))
-      (save-excursion
-        (goto-char (point-min))
-        (when (re-search-forward
-               (format "\\_<import[[:space:]]+\\(%s\\)\\_>"
-                       (regexp-quote module))
-               nil t)
-          (goto-char (match-beginning 1))
-          (seq-first
-           (my-eglot-swift--lsp-items
-            (eglot--request server :textDocument/definition
-                            (eglot--TextDocumentPositionParams))))))))
+      (let* ((content
+              (plist-get
+               (eglot--request server :workspace/getReferenceDocument
+                               `(:uri ,uri))
+               :content))
+             (name (file-name-nondirectory
+                    (car (split-string uri "[?]" t))))
+             (buffer (generate-new-buffer (format "*%s*" name)))
+             (move-function eglot-move-to-linepos-function)
+             (position-function eglot-current-linepos-function))
+        (with-current-buffer buffer
+          (insert content)
+          (let ((swift-mode-hook nil))
+            (swift-mode))
+          (font-lock-ensure)
+          (setq buffer-read-only t)
+          (setq-local eglot-move-to-linepos-function move-function)
+          (setq-local eglot-current-linepos-function position-function)
+          (setq-local my-eglot-swift--reference-server server)
+          (setq-local my-eglot-swift--reference-uri uri)
+          (add-hook
+           'kill-buffer-hook
+           (lambda ()
+             (ignore-errors
+               (jsonrpc-notify
+                server :textDocument/didClose
+                `(:textDocument (:uri ,uri)))))
+           nil t))
+        (jsonrpc-notify
+         server :textDocument/didOpen
+         `(:textDocument (:uri ,uri :languageId "swift" :version 0
+                         :text ,content)))
+        buffer)))
 
-(defun my-eglot-swift--interface-xref (server interface symbol identifier)
-  "Find SYMBOL's exact USR in INTERFACE and return an Eglot xref."
+(defun my-eglot-swift--materialize-reference-xref (server item)
+  "Make custom SourceKit reference ITEM visitable through SERVER."
+  (when-let* ((location (xref-item-location item))
+              ((xref-file-location-p location))
+              (uri (xref-file-location-file location))
+              ((string-prefix-p "sourcekit-lsp:" uri))
+              (buffer (my-eglot-swift--reference-buffer server uri)))
+    (with-current-buffer buffer
+      (goto-char (point-min))
+      (forward-line (1- (xref-file-location-line location)))
+      (funcall eglot-move-to-linepos-function
+               (xref-file-location-column location))
+      (let* ((begin (point))
+             (length (or (ignore-errors (xref-match-length item)) 0))
+             (summary (buffer-substring
+                       (line-beginning-position) (line-end-position))))
+        (xref-make-match summary
+                         (xref-make-buffer-location buffer begin)
+                         length)))))
+
+(defun my-eglot-swift--interface-xref (server interface symbol)
+  "Find SYMBOL by exact USR in SERVER's generated INTERFACE."
   (let* ((uri (or (plist-get interface :uri)
                   (plist-get interface :targetUri)))
-         (path (and uri (eglot-uri-to-path uri)))
-         (document-uri (and path (eglot-path-to-uri path)))
-         (managed
-          (when-let* ((buffer (and path (find-buffer-visiting path))))
-            (with-current-buffer buffer
-              (eq server (eglot-current-server)))))
          (usr (plist-get symbol :usr))
          (name (plist-get symbol :name))
-         (regexp
-          (if (string= identifier "init")
-              "\\_<\\(init\\)\\_>[[:space:]]*("
-            (format
-             "\\_<\\(?:actor\\|associatedtype\\|case\\|class\\|enum\\|func\\|let\\|macro\\|protocol\\|struct\\|typealias\\|var\\)\\_>[^\n]*?\\_<\\(%s\\)"
-             (regexp-quote identifier))))
-         match)
-    (when (and usr path (file-readable-p path))
-      (let ((text (with-temp-buffer
-                    (insert-file-contents path)
-                    (buffer-string))))
-        (unless managed
-          (jsonrpc-notify
-           server :textDocument/didOpen
-           `(:textDocument (:uri ,document-uri :languageId "swift" :version 0
-                           :text ,text))))
-        (unwind-protect
-            (with-temp-buffer
-              (insert text)
-              (goto-char (point-min))
-              (while (and (not match) (re-search-forward regexp nil t))
-                (let* ((start (match-beginning 1))
-                       (position
-                        `(:line ,(1- (line-number-at-pos start t))
-                          :character ,(save-excursion
-                                        (goto-char start)
-                                        (current-column))))
-                       (candidates
-                        (my-eglot-swift--lsp-items
-                         (eglot--request
-                          server :textDocument/symbolInfo
-                          `(:textDocument (:uri ,document-uri) :position ,position)))))
-                  (when-let* ((candidate
-                               (or (seq-find
-                                    (lambda (item)
-                                      (equal usr (plist-get item :usr)))
-                                    candidates)
-                                   ;; Objective-C extensions have another USR
-                                   ;; in SourceKit's generated interface.
-                                   (and (eq t (plist-get symbol :isDynamic))
-                                        (seq-find
-                                         (lambda (item)
-                                           (equal name (plist-get item :name)))
-                                         candidates)))))
-                    (setq match
-                          (or (plist-get candidate :bestLocalDeclaration)
-                              `(:uri ,document-uri
-                                :range (:start ,position :end ,position)))))))
-              match)
-          (unless managed
-            (jsonrpc-notify server :textDocument/didClose
-                            `(:textDocument (:uri ,document-uri)))))))
-    (when match
-      (eglot--collecting-xrefs (collect)
-        (collect
-         (eglot--xref-make-match
-          name (plist-get match :uri) (plist-get match :range)))))))
+         (buffer (and uri
+                      (my-eglot-swift--reference-buffer server uri)))
+         (document-symbols
+          (and buffer
+               (eglot--request
+                server :textDocument/documentSymbol
+                `(:textDocument (:uri ,uri))))))
+    (let (range)
+      (when (and usr name document-symbols)
+        (cl-labels
+            ((find-range
+              (items)
+              (seq-some
+               (lambda (item)
+                 (or
+                  (when-let* (((equal name (plist-get item :name)))
+                              (selection (plist-get item :selectionRange))
+                              (position (plist-get selection :start))
+                              (candidate
+                               (seq-find
+                                (lambda (value)
+                                  (equal usr (plist-get value :usr)))
+                                (my-eglot-swift--lsp-items
+                                 (eglot--request
+                                  server :textDocument/symbolInfo
+                                  `(:textDocument (:uri ,uri)
+                                    :position ,position))))))
+                    selection)
+                  (find-range (plist-get item :children))))
+               items)))
+          (setq range (find-range document-symbols))))
+      (when range
+        (with-current-buffer buffer
+          (pcase-let ((`(,begin . ,end) (eglot-range-region range)))
+            (goto-char begin)
+            (list
+             (xref-make-match
+              (buffer-substring (line-beginning-position) (line-end-position))
+              (xref-make-buffer-location buffer begin)
+              (- end begin)))))))))
 
 (defun my-eglot-swift--framework-definition (identifier)
   "Return an interface definition for external Swift IDENTIFIER."
@@ -133,20 +166,19 @@
            (eglot--request server :textDocument/symbolInfo
                            (eglot--TextDocumentPositionParams))))
          (symbol
-          (or (seq-find
-               (lambda (item)
-                 (when-let* ((name (plist-get item :name)))
-                   (and (plist-get item :systemModule)
-                        (or (equal name source-identifier)
-                            (string-prefix-p (concat source-identifier "(") name)))))
-               symbols)
-              (seq-find (lambda (item) (plist-get item :systemModule)) symbols)))
+          (seq-find
+           (lambda (item)
+             (when-let* ((name (plist-get item :name)))
+               (and (plist-get item :systemModule)
+                    (or (equal name source-identifier)
+                        (string-prefix-p
+                         (concat source-identifier "(") name)))))
+           symbols))
          (module (plist-get (plist-get symbol :systemModule) :moduleName))
          (interface (and module
                          (my-eglot-swift--module-interface server module))))
     (and interface
-         (my-eglot-swift--interface-xref
-          server interface symbol source-identifier))))
+         (my-eglot-swift--interface-xref server interface symbol))))
 
 (defun my-consult-eglot--generated-swift-symbol-p (symbol-info)
   "Return non-nil when SYMBOL-INFO names a Swift mangled symbol."
@@ -195,15 +227,28 @@
         (plist-put (plist-get capabilities :workspace)
                    :didChangeWatchedFiles
                    '(:dynamicRegistration :json-false
-                     :relativePatternSupport t)))
+                     :relativePatternSupport t))
+        (setq capabilities
+              (plist-put
+               capabilities :experimental
+               '(:workspace/getReferenceDocument (:supported t)))))
       capabilities))
 
   ;; ponytail: удалить fallback, когда Xcode получит SourceKit-LSP 6.4+.
   (cl-defmethod xref-backend-definitions :around
     ((_backend (eql eglot)) identifier)
-    (or (cl-call-next-method)
-        (and (derived-mode-p 'swift-mode)
-             (my-eglot-swift--framework-definition identifier)))))
+    (let ((definitions (cl-call-next-method)))
+      (if (derived-mode-p 'swift-mode)
+          (let ((server (eglot--current-server-or-lose)))
+            (or (and definitions
+                     (mapcar
+                      (lambda (item)
+                        (or (my-eglot-swift--materialize-reference-xref
+                             server item)
+                            item))
+                      definitions))
+                (my-eglot-swift--framework-definition identifier)))
+        definitions))))
 
 (with-eval-after-load 'consult-eglot
   ;; SourceKit-LSP exposes ABI names such as `$s4App...'; they are not source
