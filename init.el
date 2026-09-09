@@ -615,17 +615,26 @@
   (advice-add 'makefile-executor-select-target :around
               #'my-makefile--select-target-with-comments))
 
+(defun my-diff-hl-update-after-revert ()
+  "Refresh diff-hl immediately after an external file change."
+  (when (bound-and-true-p diff-hl-mode)
+    (diff-hl-update)))
+
 ;; Diff-hl: цветовые полосы слева для изменений в git.
 (use-package diff-hl
   :ensure t
   :functions (diff-hl-magit-post-refresh)
   :config
+  ;; External reverts in different buffers need independent deferred updates.
+  (make-variable-buffer-local 'diff-hl-timer)
+  (put 'diff-hl-timer 'permanent-local t)
   (global-diff-hl-mode 1)
   ;; Показывать полосы в отступе слева (margin), а не во фринже.
   ;; Это работает и в GUI, и в терминале.
   (diff-hl-margin-mode 1)
   ;; Обновлять полосы во время редактирования, без сохранения файла.
   (require 'diff-hl-flydiff)
+  (add-hook 'after-revert-hook #'my-diff-hl-update-after-revert)
   ;; После операций Magit обновлять отметки во всех буферах репозитория.
   (with-eval-after-load 'magit-mode
     (add-hook 'magit-post-refresh-hook #'diff-hl-magit-post-refresh))
