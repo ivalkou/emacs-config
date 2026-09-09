@@ -106,8 +106,9 @@
   :custom
   (nerd-icons-font-family "Hack Nerd Font Mono"))
 
-;; Отключить стартовое приветственное окно Emacs.
-(setq inhibit-startup-message t)
+;; Вместо стартового приветствия открывать рабочий Org dashboard.
+(setq inhibit-startup-message t
+      initial-buffer-choice (expand-file-name "~/org/dashboard.org"))
 
 ;; См. ~/.config/emacs/early-init.el для отключения декораций окна.
 
