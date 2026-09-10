@@ -597,6 +597,10 @@
 (defun my-meow-setup ()
   "Configure the standard QWERTY Meow command layout."
   (setq meow-cheatsheet-layout meow-cheatsheet-layout-qwerty)
+  (meow-motion-define-key
+   '("j" . meow-next)
+   '("k" . meow-prev)
+   '("<escape>" . ignore))
   (meow-leader-define-key
    '("1" . meow-digit-argument)
    '("2" . meow-digit-argument)
@@ -690,6 +694,8 @@
 (use-package meow
   :ensure t
   :demand t
+  :custom
+  (meow-use-clipboard t)
   :config
   (my-meow-setup)
   ;; Which-key уже включён к моменту загрузки Meow, поэтому его hook не
@@ -713,7 +719,7 @@
      :background (catppuccin-color (cdr state-color))
      :foreground (catppuccin-color 'base)
      :weight 'bold))
-  ;; Не переопределять MOTION: Dired, Magit и Treemacs сохраняют свои клавиши.
+  ;; Отключать Meow там, где клавиши должны передаваться процессу напрямую.
   (add-hook 'after-change-major-mode-hook
             #'my-meow-disable-in-process-buffer 90)
   (meow-global-mode 1))
