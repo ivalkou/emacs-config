@@ -327,8 +327,12 @@
 
 ;;; Тексты и заметки
 
-;; Выравнивать продолжения строк под списками и цитатами.
-(add-hook 'text-mode-hook #'visual-wrap-prefix-mode)
+;; Выравнивать продолжения строк под списками и цитатами. В Org это
+;; конфликтует с оформлением блоков в org-modern.
+(add-hook 'text-mode-hook
+          (lambda ()
+            (unless (derived-mode-p 'org-mode)
+              (visual-wrap-prefix-mode))))
 
 ;; Org mode: настройка органайзера.
 (use-package org
@@ -342,6 +346,13 @@
   :config
   (set-face-attribute 'org-level-1 nil :height 1.5)
   (set-face-attribute 'org-level-2 nil :height 1.2))
+
+;; Org Modern: визуально оформляет таблицы, заголовки и блоки Org.
+(use-package org-modern
+  :ensure t
+  :hook (org-mode . org-modern-mode)
+  :bind (:map org-mode-map
+              ("C-c v" . org-modern-mode)))
 
 ;; Встроенный в Emacs 31 tree-sitter режим Markdown. При первом открытии
 ;; сам регистрирует и устанавливает grammars markdown и markdown-inline.
