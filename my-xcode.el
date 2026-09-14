@@ -799,10 +799,12 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
 (defvar-local my-xcode--dape-tab-context nil
   "Frame and tab where the current Dape compilation started.")
 
-(defun my-xcode--restore-dape-tab (_buffer result)
+(defun my-xcode--restore-dape-tab (buffer result)
   "Return to the Dape launch tab after a successful compilation RESULT."
-  (when (and (equal result "finished\n") my-xcode--dape-tab-context)
-    (my-xcode--select-tab-context my-xcode--dape-tab-context)))
+  (when (equal result "finished\n")
+    (with-current-buffer buffer
+      (when my-xcode--dape-tab-context
+        (my-xcode--select-tab-context my-xcode--dape-tab-context)))))
 
 
 (defun my-xcode--format-build-elapsed (seconds)
