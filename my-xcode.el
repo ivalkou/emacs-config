@@ -8,6 +8,20 @@
 (require 'project)
 (require 'seq)
 (require 'subr-x)
+(require 'tab-bar)
+
+(defun my-xcode--tab-context ()
+  "Return the selected frame and its current tab number."
+  (cons (selected-frame) (1+ (tab-bar--current-tab-index))))
+
+(defun my-xcode--select-tab-context (context)
+  "Select tab CONTEXT when its frame and tab still exist."
+  (pcase-let ((`(,frame . ,tab-number) context))
+    (when (and (frame-live-p frame)
+               (<= tab-number (length (tab-bar-tabs frame))))
+      (select-frame frame)
+      (tab-bar-select-tab tab-number))))
+
 
 (declare-function eglot-current-server "eglot" ())
 (declare-function eglot-reconnect "eglot" (server &optional interactive))
@@ -782,6 +796,15 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
 (defvar-local my-xcode--build-operation-count 0
   "Number of xcodebuild operations observed in this compilation buffer.")
 
+(defvar-local my-xcode--dape-tab-context nil
+  "Frame and tab where the current Dape compilation started.")
+
+(defun my-xcode--restore-dape-tab (_buffer result)
+  "Return to the Dape launch tab after a successful compilation RESULT."
+  (when (and (equal result "finished\n") my-xcode--dape-tab-context)
+    (my-xcode--select-tab-context my-xcode--dape-tab-context)))
+
+
 (defun my-xcode--format-build-elapsed (seconds)
   "Format elapsed SECONDS as minutes and seconds."
   (let ((seconds (max 0 (floor seconds))))
@@ -878,8 +901,14 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
          (compilation-buffer-name-function
           (lambda (_) (format "*Xcode Debug %s*" project-name)))
          (display-buffer-overriding-action
-          '((display-buffer-no-window) (allow-no-window . t))))
-    (my-xcode--track-compilation-buffer (compile command))))
+          '((display-buffer-no-window) (allow-no-window . t)))
+         (buffer (compile command)))
+    (with-current-buffer buffer
+      (setq-local my-xcode--dape-tab-context (my-xcode--tab-context))
+      (add-hook 'compilation-finish-functions
+                #'my-xcode--restore-dape-tab -100 t))
+    (my-xcode--track-compilation-buffer buffer)))
+
 
 (defun my-xcode-dape-compile (command)
   "Run Xcodebuild COMMAND hidden with status, delegating other builds normally."
@@ -1013,18 +1042,24 @@ Keep the buffer hidden and show build status unless VISIBLE is non-nil."
   "Build, launch and debug the selected Xcode app through Dape."
   (interactive)
   (require 'dape)
-  (my-xcode--with-selection
-   (lambda (selection)
-     (my-xcode--product-settings-async
-      selection
-      (lambda (product)
-        (let* ((launch (my-xcode--dape-command selection product))
-               (command (plist-get launch :command))
-               (session (plist-put (plist-get launch :session)
-                                   :command command)))
-          (setq-local dape-command command)
-          (my-xcode--state-put :last-dape-session session)
-          (dape (cdr command))))))))
+  (let ((launch-tab (my-xcode--tab-context)))
+    (my-xcode--with-selection
+     (lambda (selection)
+       (my-xcode--product-settings-async
+        selection
+        (lambda (product)
+          (let* ((launch (my-xcode--dape-command selection product))
+                 (command (plist-get launch :command))
+                 (session (plist-put (plist-get launch :session)
+                                     :command command))
+                 (selected-tab (my-xcode--tab-context)))
+            (setq-local dape-command command)
+            (my-xcode--state-put :last-dape-session session)
+            (unwind-protect
+                (progn
+                  (my-xcode--select-tab-context launch-tab)
+                  (dape (cdr command)))
+              (my-xcode--select-tab-context selected-tab)))))))))
 
 (defun my-xcode--display-info (container state &optional product)
   "Display CONTAINER, STATE and optional resolved PRODUCT."

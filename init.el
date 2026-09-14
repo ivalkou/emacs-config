@@ -487,6 +487,7 @@
   :bind ("C-c a" . agent-shell)
   :custom
   (agent-shell-preferred-agent-config 'omp)
+  (agent-shell-session-strategy 'prompt)
   (agent-shell-display-action
    '((display-buffer-in-side-window)
      (side . right)
