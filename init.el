@@ -484,7 +484,9 @@
   :ensure t
   :functions agent-shell-cwd
   :commands agent-shell
-  :bind ("C-c a" . agent-shell)
+  :bind (("C-c a" . agent-shell)
+         :map agent-shell-mode-map
+         ("C-c q" . agent-shell-prompt-queue))
   :custom
   (agent-shell-preferred-agent-config 'omp)
   (agent-shell-session-strategy 'prompt)
