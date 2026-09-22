@@ -350,6 +350,9 @@
 ;; Org Modern: визуально оформляет таблицы, заголовки и блоки Org.
 (use-package org-modern
   :ensure t
+  :custom
+  (org-modern-fold-stars
+   '(("▶" . "▼") ("▷" . "▽") ("▸" . "▾")))
   :hook (org-mode . org-modern-mode)
   :bind (:map org-mode-map
               ("C-c v" . org-modern-mode)))
