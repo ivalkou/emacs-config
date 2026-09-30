@@ -729,11 +729,11 @@
   :config
   (repeat-mode 1))
 
-;; Автоматически обновлять файлы через системные уведомления и Git-состояние.
+;; Проверять файлы и Git-состояние каждые 5 секунд: уведомления могут теряться.
 (use-package autorevert
   :ensure nil
   :custom
-  (auto-revert-avoid-polling t)
+  (auto-revert-use-notify nil)
   (auto-revert-check-vc-info t)
   :config
   (global-auto-revert-mode 1))
