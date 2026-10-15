@@ -1,6 +1,9 @@
 ;;; my-xcode.el --- Xcode commands for Swift projects -*- lexical-binding: t; -*-
 
 ;; Xcode: project-scoped scheme/device selection and Dape launch assembly.
+;; C-c x k interrupts the current project's latest Build/Clean Build/Run/Debug
+;; compilation, including pending install/launch steps; C-c x q also stops
+;; the debugger and app.  Cancellation keeps output (C-c x v) and shows stopped.
 (require 'cl-lib)
 (require 'compile)
 (require 'json)
@@ -796,6 +799,9 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
 (defvar-local my-xcode--build-operation-count 0
   "Number of xcodebuild operations observed in this compilation buffer.")
 
+(defvar-local my-xcode--build-stop-requested nil
+  "Non-nil when the user has requested cancellation of this compilation.")
+
 (defvar-local my-xcode--dape-tab-context nil
   "Frame and tab where the current Dape compilation started.")
 
@@ -838,7 +844,8 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
   "Start displaying build progress for compilation BUFFER."
   (my-xcode--stop-build-mode-line-timer)
   (with-current-buffer buffer
-    (setq-local my-xcode--build-operation-count 0))
+    (setq-local my-xcode--build-operation-count 0
+                my-xcode--build-stop-requested nil))
   (setq my-xcode--build-status
         (list :buffer buffer :state 'building :started (float-time)))
   (setq my-xcode--build-mode-line-timer
@@ -870,7 +877,9 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
           (setq my-xcode--build-status nil)
         (setq my-xcode--build-status
               (list :buffer buffer
-                    :state (if (string-match-p "killed" result)
+                    :state (if (or (buffer-local-value
+                                    'my-xcode--build-stop-requested buffer)
+                                   (string-match-p "killed\\|interrupt" result))
                                'stopped
                              'failed)
                     :started (plist-get my-xcode--build-status :started)
@@ -927,6 +936,17 @@ DEBUG requests a debugger wait; JSON-FILE captures a physical launch PID."
           (quit-window nil window)
         (pop-to-buffer buffer))
     (user-error "No tracked Xcode build output for this project")))
+
+(defun my-xcode-stop-build ()
+  "Interrupt this project's latest build, including pending install and launch."
+  (interactive)
+  (let* ((buffer (plist-get (my-xcode--state) :last-build-buffer))
+         (process (and (buffer-live-p buffer) (get-buffer-process buffer))))
+    (unless (and process (process-live-p process))
+      (user-error "No running Xcode build for this project"))
+    (with-current-buffer buffer
+      (setq my-xcode--build-stop-requested t)
+      (kill-compilation))))
 
 (defun my-xcode--start-compilation (name commands &optional visible)
   "Run COMMANDS in an Xcode compilation buffer named NAME.
@@ -1195,8 +1215,13 @@ SUCCESS-STATUSES defaults to just zero.  Invoke EXIT-CALLBACK with the process."
     (delete-file pid-file)))
 
 (defun my-xcode-stop ()
-  "Stop Dape immediately and terminate the app from cached session metadata."
+  "Stop the current project's build, Dape and app from cached session metadata."
   (interactive)
+  (when-let* ((buffer (plist-get (my-xcode--state) :last-build-buffer))
+              ((buffer-live-p buffer))
+              (process (get-buffer-process buffer))
+              ((process-live-p process)))
+    (my-xcode-stop-build))
   (require 'dape)
   (let* ((session (plist-get (my-xcode--state) :last-dape-session))
          (destination (plist-get session :destination))
@@ -1261,7 +1286,7 @@ SUCCESS-STATUSES defaults to just zero.  Invoke EXIT-CALLBACK with the process."
   :doc "Project Xcode build, run and debug commands."
   "t" #'my-xcode-select-destination "s" #'my-xcode-select-scheme
   "c" #'my-xcode-select-configuration "b" #'my-xcode-build
-  "B" #'my-xcode-clean-build
+  "B" #'my-xcode-clean-build "k" #'my-xcode-stop-build
   "r" #'my-xcode-run "i" #'my-xcode-info "q" #'my-xcode-stop
   "o" #'my-xcode-open-container "l" #'my-xcode-stream-logs
   "v" #'my-xcode-toggle-build-output
@@ -1277,9 +1302,9 @@ SUCCESS-STATUSES defaults to just zero.  Invoke EXIT-CALLBACK with the process."
   (which-key-add-keymap-based-replacements
     my-xcode-prefix-map
     "t" "target device" "s" "scheme" "c" "configuration"
-    "b" "build" "B" "clean build"
+    "b" "build" "B" "clean build" "k" "stop build"
     "r" "build, install and run" "i" "show selection and product"
-    "q" "stop debugger and app" "o" "open in Xcode"
+    "q" "stop build, debugger and app" "o" "open in Xcode"
     "l" "stream app logs" "v" "debug build output"
     "j" "generate buildServer.json"
     "R" "restart Dape session" "d" "debug with Dape"))
